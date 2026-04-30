@@ -81,11 +81,13 @@ public class PortfolioBacktester : IPortfolioBacktester
         if (equityCurve.Count > 0)
             equityCurve[^1] = SnapshotEquity(state, bars, lastDay);
 
-        var metrics = ComputeBasicMetrics(request, trades, equityCurve);
+        var metrics = PortfolioMetricsCalculator.ComputeMetrics(request.StartingCapital, trades, equityCurve);
+        var monthlyPnL = PortfolioMetricsCalculator.ComputeMonthlyPnL(trades);
+        var perTicker = PortfolioMetricsCalculator.ComputePerTickerBreakdown(trades);
 
         _logger.LogInformation(
-            "Quantback complete: {TradingDays} days, {Entries} entries, {Exits} exits, end equity ${EndingEquity:F2}",
-            tradingDays.Count, trades.Count, trades.Count, metrics.EndingEquity);
+            "Quantback complete: {TradingDays} days, {TradeCount} trades, end equity ${EndingEquity:F2}, total return {TotalReturn:P2}, Sharpe {Sharpe:F2}, max DD {MaxDD:P2}",
+            tradingDays.Count, trades.Count, metrics.EndingEquity, metrics.TotalReturnPct, metrics.SharpeRatio, metrics.MaxDrawdownPct);
 
         return new PortfolioBacktestResult(
             request,
@@ -93,6 +95,8 @@ public class PortfolioBacktester : IPortfolioBacktester
             trades,
             state.OpenPositions.Values.ToList(),
             metrics,
+            monthlyPnL,
+            perTicker,
             startedAt,
             DateTime.UtcNow);
     }
@@ -273,35 +277,6 @@ public class PortfolioBacktester : IPortfolioBacktester
             state.Cash += position.Shares * bar.Close;
             state.OpenPositions.Remove(ticker);
         }
-    }
-
-    private static PortfolioBacktestMetrics ComputeBasicMetrics(
-        PortfolioBacktestRequest request,
-        IReadOnlyList<Trade> trades,
-        IReadOnlyList<EquityPoint> equityCurve)
-    {
-        var endingEquity = equityCurve.Count > 0 ? equityCurve[^1].TotalEquity : request.StartingCapital;
-        var totalReturn = request.StartingCapital == 0 ? 0.0 : (double)((endingEquity - request.StartingCapital) / request.StartingCapital);
-
-        var winners = trades.Where(t => t.RealizedPnL > 0).ToList();
-        var losers = trades.Where(t => t.RealizedPnL < 0).ToList();
-        var avgHoldDays = trades.Count == 0 ? 0.0 : trades.Average(t => (double)t.HoldDays);
-        var winRate = trades.Count == 0 ? 0.0 : (double)winners.Count / trades.Count;
-
-        return new PortfolioBacktestMetrics(
-            StartingEquity: request.StartingCapital,
-            EndingEquity: endingEquity,
-            TotalReturnPct: totalReturn,
-            AnnualizedReturnPct: 0.0,        // Q5
-            SharpeRatio: 0.0,                // Q5
-            MaxDrawdownPct: 0.0,             // Q5
-            TotalTrades: trades.Count,
-            WinningTrades: winners.Count,
-            LosingTrades: losers.Count,
-            WinRate: winRate,
-            AvgWinPnL: winners.Count == 0 ? 0m : winners.Average(t => t.RealizedPnL),
-            AvgLossPnL: losers.Count == 0 ? 0m : losers.Average(t => t.RealizedPnL),
-            AvgHoldDays: avgHoldDays);
     }
 
     private static IReadOnlyList<OhlcvRecord> TrimTo(IReadOnlyList<OhlcvRecord> history, DateOnly day) =>

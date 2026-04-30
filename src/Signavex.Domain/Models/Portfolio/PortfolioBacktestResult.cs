@@ -11,6 +11,8 @@ public record PortfolioBacktestResult(
     IReadOnlyList<Trade> Trades,
     IReadOnlyList<Position> OpenPositions,
     PortfolioBacktestMetrics Metrics,
+    IReadOnlyList<MonthlyPnLPoint> MonthlyPnL,
+    IReadOnlyList<TickerStats> PerTickerBreakdown,
     DateTime StartedAt,
     DateTime CompletedAt
 )
@@ -21,6 +23,8 @@ public record PortfolioBacktestResult(
         Trades: Array.Empty<Trade>(),
         OpenPositions: Array.Empty<Position>(),
         Metrics: PortfolioBacktestMetrics.Empty(request.StartingCapital),
+        MonthlyPnL: Array.Empty<MonthlyPnLPoint>(),
+        PerTickerBreakdown: Array.Empty<TickerStats>(),
         StartedAt: now,
         CompletedAt: now);
 }
