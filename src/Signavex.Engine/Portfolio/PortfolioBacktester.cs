@@ -62,9 +62,23 @@ public class PortfolioBacktester : IPortfolioBacktester
         var trades = new List<Trade>();
         var equityCurve = new List<EquityPoint>(tradingDays.Count);
 
+        DateOnly? prevDay = null;
         foreach (var day in tradingDays)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Cash drag — idle cash earns the risk-free rate over the calendar
+            // gap since yesterday. Q7.5. Skip the first day (no gap to accrue).
+            if (prevDay is DateOnly p && request.Strategy.RiskFreeAnnualRate > 0 && state.Cash > 0)
+            {
+                var calDays = (day.ToDateTime(TimeOnly.MinValue) - p.ToDateTime(TimeOnly.MinValue)).TotalDays;
+                if (calDays > 0)
+                {
+                    var dailyRate = (decimal)(request.Strategy.RiskFreeAnnualRate / 365.0);
+                    state.Cash *= (1m + dailyRate * (decimal)calDays);
+                }
+            }
+            prevDay = day;
 
             state.ExitedToday.Clear();
             var scores = await ScoreUniverseAsync(bars, day);
@@ -77,7 +91,7 @@ public class PortfolioBacktester : IPortfolioBacktester
         // close so equity captures the unrealized P&L instead of leaving it
         // floating.
         var lastDay = tradingDays[^1];
-        ForceCloseAll(state, bars, lastDay, trades);
+        ForceCloseAll(state, bars, lastDay, request.Strategy, trades);
         if (equityCurve.Count > 0)
             equityCurve[^1] = SnapshotEquity(state, bars, lastDay);
 
@@ -143,7 +157,7 @@ public class PortfolioBacktester : IPortfolioBacktester
         StrategyParameters strategy,
         List<Trade> trades)
     {
-        var toClose = new List<(string Ticker, decimal ExitPrice, TradeExitReason Reason)>();
+        var toClose = new List<(string Ticker, decimal RawExitPrice, TradeExitReason Reason)>();
 
         foreach (var (ticker, position) in state.OpenPositions)
         {
@@ -171,10 +185,14 @@ public class PortfolioBacktester : IPortfolioBacktester
             }
         }
 
-        foreach (var (ticker, exitPrice, reason) in toClose)
+        foreach (var (ticker, rawExit, reason) in toClose)
         {
             var pos = state.OpenPositions[ticker];
-            var realized = (exitPrice - pos.EntryPrice) * pos.Shares;
+            // Slippage on exit — sellers receive slightly less.
+            var exitPrice = ApplySlippage(rawExit, strategy.SlippageBps, isBuy: false);
+            var grossProceeds = pos.Shares * exitPrice;
+            var realized = (exitPrice - pos.EntryPrice) * pos.Shares - strategy.CommissionPerTrade;
+
             trades.Add(new Trade(
                 Ticker: ticker,
                 Shares: pos.Shares,
@@ -184,7 +202,7 @@ public class PortfolioBacktester : IPortfolioBacktester
                 ExitPrice: exitPrice,
                 ExitReason: reason,
                 RealizedPnL: realized));
-            state.Cash += pos.Shares * exitPrice;
+            state.Cash += grossProceeds - strategy.CommissionPerTrade;
             state.OpenPositions.Remove(ticker);
             state.ExitedToday.Add(ticker);
         }
@@ -221,22 +239,43 @@ public class PortfolioBacktester : IPortfolioBacktester
             if (bar.Close <= 0)
                 continue;
 
+            // Slippage on entry — buy at a slightly worse (higher) price.
+            var entryPrice = ApplySlippage(bar.Close, strategy.SlippageBps, isBuy: true);
+
             var budget = Math.Min(state.Cash, Math.Min(totalEquity * strategy.PositionSizePct, perTickerCap));
-            var shares = (int)(budget / bar.Close);
+            // Commission consumes some of the budget up front; ensure shares
+            // can be afforded after both cost and commission.
+            var availableForShares = budget - strategy.CommissionPerTrade;
+            if (availableForShares <= 0) continue;
+
+            var shares = (int)(availableForShares / entryPrice);
             if (shares <= 0)
                 continue;
 
-            var cost = shares * bar.Close;
+            var cost = shares * entryPrice + strategy.CommissionPerTrade;
+            if (cost > state.Cash) continue;
+
             state.Cash -= cost;
             state.OpenPositions[ticker] = new Position(
                 Ticker: ticker,
                 Shares: shares,
-                EntryPrice: bar.Close,
+                EntryPrice: entryPrice,
                 EntryDate: day,
                 EntryReason: $"Score {score:F2} ≥ {strategy.MinScoreToEnter:F2}",
-                StopLossPrice: bar.Close * (1 - strategy.StopLossPct),
-                TakeProfitPrice: bar.Close * (1 + strategy.TakeProfitPct));
+                StopLossPrice: entryPrice * (1 - strategy.StopLossPct),
+                TakeProfitPrice: entryPrice * (1 + strategy.TakeProfitPct));
         }
+    }
+
+    /// <summary>
+    /// Adjust price by <paramref name="slippageBps"/> basis points. Buyers
+    /// pay slightly more, sellers receive slightly less. 1 bp = 0.01%.
+    /// </summary>
+    public static decimal ApplySlippage(decimal price, double slippageBps, bool isBuy)
+    {
+        if (slippageBps <= 0) return price;
+        var factor = (decimal)(slippageBps / 10_000.0);
+        return isBuy ? price * (1m + factor) : price * (1m - factor);
     }
 
     private static EquityPoint SnapshotEquity(
@@ -257,6 +296,7 @@ public class PortfolioBacktester : IPortfolioBacktester
         PortfolioState state,
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvRecord>> bars,
         DateOnly lastDay,
+        StrategyParameters strategy,
         List<Trade> trades)
     {
         foreach (var (ticker, position) in state.OpenPositions.ToList())
@@ -264,17 +304,18 @@ public class PortfolioBacktester : IPortfolioBacktester
             if (!TryGetBar(bars[ticker], lastDay, out var bar))
                 continue;
 
-            var realized = (bar.Close - position.EntryPrice) * position.Shares;
+            var exitPrice = ApplySlippage(bar.Close, strategy.SlippageBps, isBuy: false);
+            var realized = (exitPrice - position.EntryPrice) * position.Shares - strategy.CommissionPerTrade;
             trades.Add(new Trade(
                 Ticker: ticker,
                 Shares: position.Shares,
                 EntryDate: position.EntryDate,
                 EntryPrice: position.EntryPrice,
                 ExitDate: lastDay,
-                ExitPrice: bar.Close,
+                ExitPrice: exitPrice,
                 ExitReason: TradeExitReason.EndOfBacktest,
                 RealizedPnL: realized));
-            state.Cash += position.Shares * bar.Close;
+            state.Cash += position.Shares * exitPrice - strategy.CommissionPerTrade;
             state.OpenPositions.Remove(ticker);
         }
     }

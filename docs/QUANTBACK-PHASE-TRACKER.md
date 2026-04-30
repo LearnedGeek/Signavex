@@ -101,12 +101,16 @@ Cold-cache UX is addressed in Q6 (defer interactive run until cache is warm, or 
 
 ---
 
-## Q7 — Realism polish (optional, post-launch)
-- [ ] **Q7.1** Slippage model (bps per side, configurable)
-- [ ] **Q7.2** Commissions (flat or per-share, configurable)
-- [ ] **Q7.3** Survivorship bias note: source historical delisted tickers if available
-- [ ] **Q7.4** Corporate actions: confirm `adjusted=true` covers splits/divs adequately
-- [ ] **Q7.5** Cash drag (idle cash earns short-term Treasury rate)
+## Q7 — Realism polish ✅
+- [x] **Q7.1** Slippage — `StrategyParameters.SlippageBps` adjusts entry up and exit down by the configured basis points. New `PortfolioBacktester.ApplySlippage` helper is the single price-adjustment chokepoint.
+- [x] **Q7.2** Commissions — `StrategyParameters.CommissionPerTrade` (flat $) deducted from cash on entry and from realized P&L on exit. Entry budget is reduced by commission before computing affordable shares.
+- [x] **Q7.3** Survivorship bias — **acknowledged caveat, not fixed in v1.** Universe presets (`top10`, `fang`) are point-in-time current symbols; historical backtests over 5+ years implicitly drop delisted names. Future work: source CRSP-style historical constituent lists. Documented in class comment.
+- [x] **Q7.4** Corporate actions — already handled by Q3's `adjusted=true` flag on Polygon's `/v2/aggs`, which bakes splits and dividends into the price series. No code change needed.
+- [x] **Q7.5** Cash drag — `StrategyParameters.RiskFreeAnnualRate` (annualized) accrues on idle cash at `(rate / 365) × calendar_days_since_last_step` per simulation day. Defaults to 0 so behavior is unchanged for legacy callers.
+- [x] **Q7.x** New `StrategyParameters.Realistic` factory (5 bps slippage, $1 commission, 4% risk-free) for opt-in realistic defaults.
+- [x] **Q7.x** 10 tests cover slippage helper math (theory cases), entry slippage, exit slippage, commission deduction, cash drag accrual, and a sanity test confirming `Default` (zeros) matches Q4 behavior exactly.
+
+**Exit criteria met:** Realism fields are opt-in via `StrategyParameters`. Default behavior is unchanged. `Realistic` preset gives reasonable retail-account values for users who want the friction modeled.
 
 ---
 
