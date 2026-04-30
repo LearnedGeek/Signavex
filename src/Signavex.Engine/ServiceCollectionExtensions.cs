@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Signavex.Domain.Interfaces;
+using Signavex.Engine.Portfolio;
 
 namespace Signavex.Engine;
 
@@ -15,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<UniverseProvider>();
         services.AddScoped<ScanEngine>();
         services.AddScoped<BacktestService>();
+        services.AddScoped<IPortfolioBacktester, PortfolioBacktester>();
 
         return services;
     }

@@ -23,12 +23,13 @@ Portfolio-simulation backtest. Extends Signavex's point-in-time `/backtest` page
 
 ---
 
-## Q2 — Stub engine + DI wiring
-- [ ] **Q2.1** `PortfolioBacktester` skeleton implementing `IPortfolioBacktester` (returns empty result)
-- [ ] **Q2.2** Register in `Signavex.Engine.ServiceCollectionExtensions`
-- [ ] **Q2.3** Integration test: resolve from DI, run a no-op backtest, assert empty `BacktestResult`
+## Q2 — Stub engine + DI wiring ✅
+- [x] **Q2.1** `PortfolioBacktester` in `Signavex.Engine.Portfolio/` returns `PortfolioBacktestResult.Empty()` and logs the request
+- [x] **Q2.2** Registered as `IPortfolioBacktester` in `AddSignavexEngine()`
+- [x] **Q2.3** 3 tests: direct `RunAsync` echoes request + empty collections; DI resolves `IPortfolioBacktester → PortfolioBacktester`; cancellation token honored
+- [x] **Q2.x** Added `Microsoft.Extensions.DependencyInjection` + `Microsoft.Extensions.Logging` to `Signavex.Engine.Tests` (needed for integration test)
 
-**Exit criteria:** can call `RunAsync(request)` end-to-end through DI. Engine project builds and ships even though the body is stubbed.
+**Exit criteria met:** `RunAsync(request)` resolves through DI and round-trips an empty result. Phase tracker visible in tracker file. Engine builds + ships.
 
 ---
 
