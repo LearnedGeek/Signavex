@@ -91,6 +91,7 @@ builder.Services.ConfigureApplicationCookie(options =>
 // Application services
 builder.Services.AddSingleton<ScanDashboardService>();
 builder.Services.AddSingleton<BacktestRunnerService>();
+builder.Services.AddSingleton<QuantbackRunnerService>();
 builder.Services.AddSingleton<ApiKeyValidationService>();
 builder.Services.AddSingleton<EconomicDashboardService>();
 builder.Services.AddSingleton<DailyBriefService>();
@@ -460,6 +461,44 @@ app.MapPost("/admin/run-backtest", (BacktestRunnerService backtest, HttpContext 
     _ = Task.Run(() => backtest.RunBacktestAsync(asOf));
 
     return Results.Redirect("/admin?action=run-backtest");
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+
+// Quantback (portfolio-simulation backtest) — admin triggers a run with a
+// configured request; the singleton holds the latest result for any Pro
+// user to view at /quantback. Cold cache may take many minutes for larger
+// universes (~5 req/min Polygon free tier).
+app.MapPost("/admin/run-quantback", (QuantbackRunnerService runner, HttpContext ctx) =>
+{
+    var form = ctx.Request.Form;
+
+    var startStr = form["startDate"].ToString();
+    var endStr = form["endDate"].ToString();
+    var universeStr = form["universe"].ToString();
+    var capitalStr = form["startingCapital"].ToString();
+
+    var start = DateOnly.TryParse(startStr, out var s) ? s : DateOnly.FromDateTime(DateTime.Today.AddYears(-1));
+    var end = DateOnly.TryParse(endStr, out var e) ? e : DateOnly.FromDateTime(DateTime.Today);
+    var capital = decimal.TryParse(capitalStr, out var c) ? c : 100_000m;
+
+    // Universe presets — keep this short; users on free tier will hit rate
+    // limits on large universes anyway.
+    string[] universe = universeStr switch
+    {
+        "top10" => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
+        "fang"  => new[] { "META", "AMZN", "AAPL", "NFLX", "GOOGL" },
+        _       => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
+    };
+
+    var strategy = Signavex.Domain.Models.Portfolio.StrategyParameters.Default;
+    var request = new Signavex.Domain.Models.Portfolio.PortfolioBacktestRequest(
+        StartDate: start,
+        EndDate: end,
+        StartingCapital: capital,
+        Universe: universe,
+        Strategy: strategy);
+
+    runner.TryStartRun(request);
+    return Results.Redirect("/quantback");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 // =============================================================================

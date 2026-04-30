@@ -86,16 +86,18 @@ Cold-cache UX is addressed in Q6 (defer interactive run until cache is warm, or 
 
 ---
 
-## Q6 — UI
-- [ ] **Q6.1** New page `/quantback` (Pro-gated; mirror existing `/backtest` auth pattern)
-- [ ] **Q6.2** Config form: date range, universe slice, strategy params
-- [ ] **Q6.3** Equity curve chart (lightweight-charts, line series)
-- [ ] **Q6.4** Metrics summary cards
-- [ ] **Q6.5** Trade log table (paginated, sortable)
-- [ ] **Q6.6** Per-ticker breakdown table
-- [ ] **Q6.7** "Save scenario" so users can re-run with same parameters
+## Q6 — UI ✅ (Q6.7 deferred)
+- [x] **Q6.1** New `/quantback` page, Pro-gated, with `<UpgradePrompt>` for Free users (mirrors `/backtest`)
+- [x] **Q6.2** Admin-only config form: date range, universe preset (`top10` / `fang`), starting capital. POSTs to `/admin/run-quantback`. Match existing pattern of admin-triggered runs to avoid long-running web requests.
+- [x] **Q6.3** Equity curve chart via `EquityCurveChart.razor` + `equity-chart.js` (lightweight-charts area series). Survives Blazor enhanced nav via `[data-equity-chart]` scan + `enhancedload` hook, same pattern as `price-chart.js`.
+- [x] **Q6.4** Six metric summary cards (`MetricCard.razor`): TotalReturn, Annualized, Sharpe, MaxDD, Trades, WinRate. Tone (good/bad/neutral) drives value color.
+- [x] **Q6.5** Trade log table — entry/exit dates + prices, exit reason, P&L, %, hold days. Ordered by exit date desc.
+- [x] **Q6.6** Per-ticker breakdown + monthly P&L tables side-by-side.
+- [x] **Q6.x** `QuantbackRunnerService` (singleton) holds latest result + `IsRunning` + `LastError`; admin form fires-and-forgets via `TryStartRun(request)` so the POST returns immediately.
+- [x] **Q6.x** Nav link added (Pro badge for Free users).
+- [ ] **Q6.7** ~~Save scenario~~ — deferred to follow-up. The admin form is trivial to re-fill so the value of named-scenario persistence is low until there are many users.
 
-**Exit criteria:** user can configure + run a backtest, see all metrics + chart + trade log on one page.
+**Exit criteria met (modulo Q6.7):** Pro users land on `/quantback`, see metrics cards + equity chart + trade log + per-ticker + monthly P&L. Admins additionally see a form to kick off new runs; runs execute in the background so the form POST returns immediately.
 
 ---
 

@@ -1,0 +1,44 @@
+@using Signavex.Domain.Models.Portfolio
+@using System.Text.Json
+
+<div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest mb-6 overflow-hidden">
+    <div class="flex items-center justify-between px-4 pt-4 pb-2">
+        <h3 class="text-sm font-semibold text-on-surface">Equity curve</h3>
+        @if (EquityCurve is { Count: > 0 })
+        {
+            <span class="text-xs text-on-surface-variant">
+                @EquityCurve[0].Date.ToString("yyyy-MM-dd") → @EquityCurve[^1].Date.ToString("yyyy-MM-dd")
+            </span>
+        }
+    </div>
+    <div id="@_containerId"
+         data-equity-chart
+         data-chart-config="@_jsonData"
+         data-chart-height="@Height"
+         style="width:100%; height:@(Height)px;"></div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<EquityPoint>? EquityCurve { get; set; }
+    [Parameter] public int Height { get; set; } = 320;
+
+    private readonly string _containerId = $"equity-chart-{Guid.NewGuid():N}";
+    private string _jsonData = "[]";
+
+    protected override void OnParametersSet()
+    {
+        if (EquityCurve is null || EquityCurve.Count == 0)
+        {
+            _jsonData = "[]";
+            return;
+        }
+
+        // lightweight-charts expects { time: 'YYYY-MM-DD', value: number } objects.
+        var points = EquityCurve.Select(p => new
+        {
+            time = p.Date.ToString("yyyy-MM-dd"),
+            value = (double)p.TotalEquity
+        });
+        _jsonData = JsonSerializer.Serialize(points);
+    }
+}

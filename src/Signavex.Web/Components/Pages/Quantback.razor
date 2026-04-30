@@ -1,0 +1,248 @@
+@page "/quantback"
+@attribute [Authorize]
+@using Signavex.Domain.Models.Portfolio
+@using Signavex.Web.Services
+@inject QuantbackRunnerService Runner
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>Quantback — Signavex</PageTitle>
+
+<div class="animate-fade-in">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-on-surface tracking-tight">Quantback</h1>
+            <p class="text-sm text-on-surface-variant mt-0.5">Portfolio simulation — what would mechanically following the picks have done over time?</p>
+        </div>
+    </div>
+
+    @if (!_isPro)
+    {
+        <UpgradePrompt Title="Unlock Quantback"
+                       Description="Run multi-year portfolio simulations of the signal-driven strategy." />
+    }
+    else
+    {
+        @if (Runner.IsRunning)
+        {
+            var req = Runner.RunningRequest;
+            <div class="rounded-[var(--radius-md)] border border-warning/30 bg-warning/5 p-4 mb-4 text-sm text-on-surface">
+                <p class="font-medium">Quantback is running…</p>
+                @if (req is not null)
+                {
+                    <p class="text-on-surface-variant mt-1 text-xs">
+                        @req.StartDate to @req.EndDate · @req.Universe.Count tickers · started @Runner.RunStartedAt?.ToString("HH:mm:ss") UTC
+                    </p>
+                }
+                <p class="text-on-surface-variant mt-1 text-xs">Cold cache can take 10–60+ minutes on the free tier. Refresh the page periodically.</p>
+            </div>
+        }
+
+        @if (Runner.LastError is not null)
+        {
+            <div class="rounded-[var(--radius-md)] border border-error/30 bg-error/5 p-4 mb-4 text-sm text-on-surface">
+                <p class="font-medium">Last run failed</p>
+                <p class="text-on-surface-variant mt-1 text-xs">@Runner.LastError</p>
+            </div>
+        }
+
+        @if (_isAdmin)
+        {
+            @* Admin trigger form — only admins can kick off runs since they consume API budget *@
+            <div class="mb-6 rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest p-4">
+                <h3 class="text-sm font-semibold text-on-surface mb-3">Run a new backtest (admin)</h3>
+                <form method="post" action="/admin/run-quantback" data-enhance="true" class="flex flex-wrap items-end gap-3 text-sm">
+                    <AntiforgeryToken />
+                    <div class="flex flex-col gap-1">
+                        <label class="text-xs text-on-surface-variant">Start</label>
+                        <input type="date" name="startDate" value="@DateOnly.FromDateTime(DateTime.Today.AddYears(-1)).ToString("yyyy-MM-dd")"
+                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <label class="text-xs text-on-surface-variant">End</label>
+                        <input type="date" name="endDate" value="@DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd")"
+                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <label class="text-xs text-on-surface-variant">Universe</label>
+                        <select name="universe" class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5">
+                            <option value="top10" selected>Top 10 S&amp;P</option>
+                            <option value="fang">FAANG</option>
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <label class="text-xs text-on-surface-variant">Starting capital</label>
+                        <input type="number" name="startingCapital" value="100000" min="1000" step="1000"
+                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-32" />
+                    </div>
+                    <button type="submit" disabled="@Runner.IsRunning"
+                            class="rounded-[var(--radius-sm)] bg-primary px-4 py-2 text-sm font-medium text-on-primary disabled:opacity-50">
+                        Run
+                    </button>
+                </form>
+            </div>
+        }
+
+        @if (Runner.LatestResult is not null)
+        {
+            var result = Runner.LatestResult;
+            var m = result.Metrics;
+
+            @* Summary cards *@
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                <MetricCard Label="Total return" Value="@FormatPct(m.TotalReturnPct)" Tone="@ToneFor(m.TotalReturnPct)" />
+                <MetricCard Label="Annualized" Value="@FormatPct(m.AnnualizedReturnPct)" Tone="@ToneFor(m.AnnualizedReturnPct)" />
+                <MetricCard Label="Sharpe" Value="@m.SharpeRatio.ToString("F2")" Tone="@(m.SharpeRatio > 1 ? "good" : m.SharpeRatio < 0 ? "bad" : "neutral")" />
+                <MetricCard Label="Max DD" Value="@FormatPct(-m.MaxDrawdownPct)" Tone="@(m.MaxDrawdownPct > 0.20 ? "bad" : "neutral")" />
+                <MetricCard Label="Trades" Value="@m.TotalTrades.ToString()" Tone="neutral" />
+                <MetricCard Label="Win rate" Value="@FormatPct(m.WinRate)" Tone="@(m.WinRate >= 0.5 ? "good" : "bad")" />
+            </div>
+
+            @* Equity curve chart *@
+            @if (result.EquityCurve.Count > 0)
+            {
+                <EquityCurveChart EquityCurve="result.EquityCurve" Height="320" />
+            }
+
+            <div class="grid lg:grid-cols-2 gap-4 mb-6">
+                @* Per-ticker breakdown *@
+                @if (result.PerTickerBreakdown.Count > 0)
+                {
+                    <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
+                        <div class="px-4 pt-4 pb-2"><h3 class="text-sm font-semibold">Per-ticker breakdown</h3></div>
+                        <table class="w-full text-xs">
+                            <thead class="bg-surface-container text-on-surface-variant">
+                                <tr>
+                                    <th class="text-left px-3 py-2 font-medium">Ticker</th>
+                                    <th class="text-right px-3 py-2 font-medium">Trades</th>
+                                    <th class="text-right px-3 py-2 font-medium">Win %</th>
+                                    <th class="text-right px-3 py-2 font-medium">Total P&amp;L</th>
+                                    <th class="text-right px-3 py-2 font-medium">Avg hold</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in result.PerTickerBreakdown)
+                                {
+                                    <tr class="border-t border-outline-variant/30">
+                                        <td class="px-3 py-1.5 font-medium text-on-surface">@t.Ticker</td>
+                                        <td class="text-right px-3 py-1.5">@t.TradeCount</td>
+                                        <td class="text-right px-3 py-1.5">@FormatPct(t.WinRate)</td>
+                                        <td class="text-right px-3 py-1.5 @(t.TotalPnL >= 0 ? "text-success" : "text-error")">@FormatMoney(t.TotalPnL)</td>
+                                        <td class="text-right px-3 py-1.5">@t.AvgHoldDays.ToString("F1")d</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @* Monthly P&L *@
+                @if (result.MonthlyPnL.Count > 0)
+                {
+                    <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
+                        <div class="px-4 pt-4 pb-2"><h3 class="text-sm font-semibold">Monthly P&amp;L</h3></div>
+                        <table class="w-full text-xs">
+                            <thead class="bg-surface-container text-on-surface-variant">
+                                <tr>
+                                    <th class="text-left px-3 py-2 font-medium">Month</th>
+                                    <th class="text-right px-3 py-2 font-medium">Trades</th>
+                                    <th class="text-right px-3 py-2 font-medium">Realized P&amp;L</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var p in result.MonthlyPnL)
+                                {
+                                    <tr class="border-t border-outline-variant/30">
+                                        <td class="px-3 py-1.5">@($"{p.Year}-{p.Month:D2}")</td>
+                                        <td class="text-right px-3 py-1.5">@p.TradeCount</td>
+                                        <td class="text-right px-3 py-1.5 @(p.RealizedPnL >= 0 ? "text-success" : "text-error")">@FormatMoney(p.RealizedPnL)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            @* Trade log *@
+            @if (result.Trades.Count > 0)
+            {
+                <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
+                    <div class="px-4 pt-4 pb-2 flex items-center justify-between">
+                        <h3 class="text-sm font-semibold">Trade log</h3>
+                        <span class="text-xs text-on-surface-variant">@result.Trades.Count trade@(result.Trades.Count == 1 ? "" : "s")</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-xs">
+                            <thead class="bg-surface-container text-on-surface-variant">
+                                <tr>
+                                    <th class="text-left px-3 py-2 font-medium">Ticker</th>
+                                    <th class="text-left px-3 py-2 font-medium">Entry</th>
+                                    <th class="text-right px-3 py-2 font-medium">Entry $</th>
+                                    <th class="text-left px-3 py-2 font-medium">Exit</th>
+                                    <th class="text-right px-3 py-2 font-medium">Exit $</th>
+                                    <th class="text-left px-3 py-2 font-medium">Reason</th>
+                                    <th class="text-right px-3 py-2 font-medium">P&amp;L</th>
+                                    <th class="text-right px-3 py-2 font-medium">%</th>
+                                    <th class="text-right px-3 py-2 font-medium">Days</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in result.Trades.OrderByDescending(x => x.ExitDate))
+                                {
+                                    <tr class="border-t border-outline-variant/30">
+                                        <td class="px-3 py-1.5 font-medium">@t.Ticker</td>
+                                        <td class="px-3 py-1.5">@t.EntryDate.ToString("yyyy-MM-dd")</td>
+                                        <td class="text-right px-3 py-1.5">@FormatMoney(t.EntryPrice)</td>
+                                        <td class="px-3 py-1.5">@t.ExitDate.ToString("yyyy-MM-dd")</td>
+                                        <td class="text-right px-3 py-1.5">@FormatMoney(t.ExitPrice)</td>
+                                        <td class="px-3 py-1.5 text-on-surface-variant">@t.ExitReason</td>
+                                        <td class="text-right px-3 py-1.5 @(t.RealizedPnL >= 0 ? "text-success" : "text-error")">@FormatMoney(t.RealizedPnL)</td>
+                                        <td class="text-right px-3 py-1.5 @(t.ReturnPct >= 0 ? "text-success" : "text-error")">@FormatPct((double)t.ReturnPct)</td>
+                                        <td class="text-right px-3 py-1.5">@t.HoldDays</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+
+            <p class="text-xs text-on-surface-variant mt-4">
+                Run started @result.StartedAt.ToString("yyyy-MM-dd HH:mm") UTC, completed @result.CompletedAt.ToString("HH:mm") UTC.
+                Scoring uses technical signals only — fundamentals, news, and macro context are not historically replayed.
+            </p>
+        }
+        else if (!Runner.IsRunning)
+        {
+            <div class="flex flex-col items-center justify-center py-16 text-center">
+                <div class="flex h-16 w-16 items-center justify-center rounded-[var(--radius-lg)] bg-surface-container mb-4">
+                    <svg class="h-8 w-8 text-on-surface-variant" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                    </svg>
+                </div>
+                <h3 class="text-base font-semibold text-on-surface">No backtest results yet</h3>
+                <p class="mt-1 text-sm text-on-surface-variant max-w-sm">
+                    @(_isAdmin ? "Run one with the form above." : "An admin needs to kick off a backtest. Check back once one has completed.")
+                </p>
+            </div>
+        }
+    }
+</div>
+
+<Disclaimer />
+
+@code {
+    private bool _isPro;
+    private bool _isAdmin;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isAdmin = authState.User.IsInRole("Admin");
+        _isPro = _isAdmin || authState.User.IsInRole("Pro");
+    }
+
+    private static string FormatPct(double v) => $"{v:+0.0%;-0.0%;0.0%}";
+    private static string FormatMoney(decimal v) => v >= 0 ? $"${v:N2}" : $"-${-v:N2}";
+    private static string ToneFor(double v) => v > 0 ? "good" : v < 0 ? "bad" : "neutral";
+}
