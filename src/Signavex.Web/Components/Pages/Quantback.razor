@@ -1,5 +1,6 @@
 @page "/quantback"
 @attribute [Authorize]
+@using System.Security.Claims
 @using Signavex.Domain.Models.Portfolio
 @using Signavex.Web.Services
 @inject QuantbackRunnerService Runner
@@ -18,73 +19,70 @@
     @if (!_isPro)
     {
         <UpgradePrompt Title="Unlock Quantback"
-                       Description="Run multi-year portfolio simulations of the signal-driven strategy." />
+                       Description="Run multi-year portfolio simulations of the signal-driven strategy. Each run is yours — results persist across visits." />
     }
     else
     {
-        @if (Runner.IsRunning)
+        @if (_latest is { IsRunning: true })
         {
-            var req = Runner.RunningRequest;
+            var req = _latest.Request;
             <div class="rounded-[var(--radius-md)] border border-warning/30 bg-warning/5 p-4 mb-4 text-sm text-on-surface">
                 <p class="font-medium">Quantback is running…</p>
                 @if (req is not null)
                 {
                     <p class="text-on-surface-variant mt-1 text-xs">
-                        @req.StartDate to @req.EndDate · @req.Universe.Count tickers · started @Runner.RunStartedAt?.ToString("HH:mm:ss") UTC
+                        @req.StartDate to @req.EndDate · @req.Universe.Count tickers · started @_latest.StartedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC
                     </p>
                 }
-                <p class="text-on-surface-variant mt-1 text-xs">Cold cache can take 10–60+ minutes on the free tier. Refresh the page periodically.</p>
+                <p class="text-on-surface-variant mt-1 text-xs">Results persist to your account — close the page if you want, just come back later. Cold cache may take 10–60+ minutes.</p>
             </div>
         }
 
-        @if (Runner.LastError is not null)
+        @if (_latest is { IsFailed: true })
         {
             <div class="rounded-[var(--radius-md)] border border-error/30 bg-error/5 p-4 mb-4 text-sm text-on-surface">
                 <p class="font-medium">Last run failed</p>
-                <p class="text-on-surface-variant mt-1 text-xs">@Runner.LastError</p>
+                <p class="text-on-surface-variant mt-1 text-xs">@_latest.Error</p>
             </div>
         }
 
-        @if (_isAdmin)
-        {
-            @* Admin trigger form — only admins can kick off runs since they consume API budget *@
-            <div class="mb-6 rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest p-4">
-                <h3 class="text-sm font-semibold text-on-surface mb-3">Run a new backtest (admin)</h3>
-                <form method="post" action="/admin/run-quantback" data-enhance="true" class="flex flex-wrap items-end gap-3 text-sm">
-                    <AntiforgeryToken />
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs text-on-surface-variant">Start</label>
-                        <input type="date" name="startDate" value="@DateOnly.FromDateTime(DateTime.Today.AddYears(-1)).ToString("yyyy-MM-dd")"
-                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
-                    </div>
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs text-on-surface-variant">End</label>
-                        <input type="date" name="endDate" value="@DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd")"
-                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
-                    </div>
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs text-on-surface-variant">Universe</label>
-                        <select name="universe" class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5">
-                            <option value="top10" selected>Top 10 S&amp;P</option>
-                            <option value="fang">FAANG</option>
-                        </select>
-                    </div>
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs text-on-surface-variant">Starting capital</label>
-                        <input type="number" name="startingCapital" value="100000" min="1000" step="1000"
-                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-32" />
-                    </div>
-                    <button type="submit" disabled="@Runner.IsRunning"
-                            class="rounded-[var(--radius-sm)] bg-primary px-4 py-2 text-sm font-medium text-on-primary disabled:opacity-50">
-                        Run
-                    </button>
-                </form>
-            </div>
-        }
+        @* Run form — visible to all Pro+Admin users; disabled while a run is in flight. *@
+        <div class="mb-6 rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest p-4">
+            <h3 class="text-sm font-semibold text-on-surface mb-3">Run a new backtest</h3>
+            <form method="post" action="/quantback/run" data-enhance="true" class="flex flex-wrap items-end gap-3 text-sm">
+                <AntiforgeryToken />
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-on-surface-variant">Start</label>
+                    <input type="date" name="startDate" value="@DateOnly.FromDateTime(DateTime.Today.AddYears(-1)).ToString("yyyy-MM-dd")"
+                           class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-on-surface-variant">End</label>
+                    <input type="date" name="endDate" value="@DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd")"
+                           class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5" />
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-on-surface-variant">Universe</label>
+                    <select name="universe" class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5">
+                        <option value="top10" selected>Top 10 S&amp;P</option>
+                        <option value="fang">FAANG</option>
+                    </select>
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-on-surface-variant">Starting capital</label>
+                    <input type="number" name="startingCapital" value="100000" min="1000" step="1000"
+                           class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-32" />
+                </div>
+                <button type="submit" disabled="@(_latest is { IsRunning: true })"
+                        class="rounded-[var(--radius-sm)] bg-primary px-4 py-2 text-sm font-medium text-on-primary disabled:opacity-50">
+                    @(_latest is { IsRunning: true } ? "Running…" : "Run")
+                </button>
+            </form>
+            <p class="text-xs text-on-surface-variant mt-2">One run at a time per account. The first run on a cold cache hits the Polygon API at 5 req/min — small universes finish faster.</p>
+        </div>
 
-        @if (Runner.LatestResult is not null)
+        @if (_latest is { IsComplete: true, Result: { } result })
         {
-            var result = Runner.LatestResult;
             var m = result.Metrics;
 
             @* Summary cards *@
@@ -97,14 +95,12 @@
                 <MetricCard Label="Win rate" Value="@FormatPct(m.WinRate)" Tone="@(m.WinRate >= 0.5 ? "good" : "bad")" />
             </div>
 
-            @* Equity curve chart *@
             @if (result.EquityCurve.Count > 0)
             {
                 <EquityCurveChart EquityCurve="result.EquityCurve" Height="320" />
             }
 
             <div class="grid lg:grid-cols-2 gap-4 mb-6">
-                @* Per-ticker breakdown *@
                 @if (result.PerTickerBreakdown.Count > 0)
                 {
                     <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -135,7 +131,6 @@
                     </div>
                 }
 
-                @* Monthly P&L *@
                 @if (result.MonthlyPnL.Count > 0)
                 {
                     <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -163,7 +158,6 @@
                 }
             </div>
 
-            @* Trade log *@
             @if (result.Trades.Count > 0)
             {
                 <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -208,11 +202,11 @@
             }
 
             <p class="text-xs text-on-surface-variant mt-4">
-                Run started @result.StartedAt.ToString("yyyy-MM-dd HH:mm") UTC, completed @result.CompletedAt.ToString("HH:mm") UTC.
+                Run @_latest.Id started @_latest.StartedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC, completed @_latest.CompletedAtUtc?.ToString("HH:mm") UTC.
                 Scoring uses technical signals only — fundamentals, news, and macro context are not historically replayed.
             </p>
         }
-        else if (!Runner.IsRunning)
+        else if (_latest is null)
         {
             <div class="flex flex-col items-center justify-center py-16 text-center">
                 <div class="flex h-16 w-16 items-center justify-center rounded-[var(--radius-lg)] bg-surface-container mb-4">
@@ -222,7 +216,7 @@
                 </div>
                 <h3 class="text-base font-semibold text-on-surface">No backtest results yet</h3>
                 <p class="mt-1 text-sm text-on-surface-variant max-w-sm">
-                    @(_isAdmin ? "Run one with the form above." : "An admin needs to kick off a backtest. Check back once one has completed.")
+                    Run your first backtest with the form above. Results persist to your account, so you can come back later.
                 </p>
             </div>
         }
@@ -233,13 +227,19 @@
 
 @code {
     private bool _isPro;
-    private bool _isAdmin;
+    private QuantbackRunSummary? _latest;
 
     protected override async Task OnParametersSetAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        _isAdmin = authState.User.IsInRole("Admin");
-        _isPro = _isAdmin || authState.User.IsInRole("Pro");
+        _isPro = authState.User.IsInRole("Pro") || authState.User.IsInRole("Admin");
+
+        if (_isPro)
+        {
+            var userId = authState.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!string.IsNullOrEmpty(userId))
+                _latest = await Runner.GetLatestRunAsync(userId);
+        }
     }
 
     private static string FormatPct(double v) => $"{v:+0.0%;-0.0%;0.0%}";

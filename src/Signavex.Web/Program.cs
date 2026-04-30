@@ -463,12 +463,16 @@ app.MapPost("/admin/run-backtest", (BacktestRunnerService backtest, HttpContext 
     return Results.Redirect("/admin?action=run-backtest");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
-// Quantback (portfolio-simulation backtest) — admin triggers a run with a
-// configured request; the singleton holds the latest result for any Pro
-// user to view at /quantback. Cold cache may take many minutes for larger
-// universes (~5 req/min Polygon free tier).
-app.MapPost("/admin/run-quantback", (QuantbackRunnerService runner, HttpContext ctx) =>
+// Quantback (portfolio-simulation backtest) — Pro+Admin gated. Each run is
+// tagged with the calling user; results are persisted to the QuantbackRuns
+// table so they survive App Service sleeps and restarts. One in-flight run
+// per user (rate-limit + API-budget protection).
+app.MapPost("/quantback/run", async (QuantbackRunnerService runner, HttpContext ctx) =>
 {
+    var userId = ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (string.IsNullOrEmpty(userId))
+        return Results.Forbid();
+
     var form = ctx.Request.Form;
 
     var startStr = form["startDate"].ToString();
@@ -497,9 +501,9 @@ app.MapPost("/admin/run-quantback", (QuantbackRunnerService runner, HttpContext 
         Universe: universe,
         Strategy: strategy);
 
-    runner.TryStartRun(request);
+    await runner.TryStartRunAsync(userId, request);
     return Results.Redirect("/quantback");
-}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+}).RequireAuthorization(policy => policy.RequireRole("Pro", "Admin"));
 
 // =============================================================================
 // CSV export endpoints — available to authenticated users (any role)

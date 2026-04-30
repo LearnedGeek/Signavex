@@ -1,80 +1,176 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Signavex.Domain.Interfaces;
 using Signavex.Domain.Models.Portfolio;
+using Signavex.Infrastructure.Persistence;
+using Signavex.Infrastructure.Persistence.Entities;
 
 namespace Signavex.Web.Services;
 
 /// <summary>
-/// Bridges <see cref="IPortfolioBacktester"/> to the Blazor UI. Singleton —
-/// holds the latest completed result so any Pro user can view it without
-/// triggering their own (potentially expensive) backtest. Admins kick off
-/// new runs.
+/// User-scoped, DB-backed runner. Each Quantback execution is a row in
+/// <c>QuantbackRuns</c> tagged with the user that started it. Results
+/// survive App Service sleeps, restarts, and deploys; users come back
+/// to <c>/quantback</c> later and see their own latest run.
+///
+/// Concurrency rule: at most one in-flight run per user. Calls to
+/// <see cref="TryStartRunAsync"/> while a Running row exists for that
+/// user return false (the page surfaces the existing one).
 /// </summary>
 public class QuantbackRunnerService
 {
+    private const string StatusRunning = "Running";
+    private const string StatusComplete = "Complete";
+    private const string StatusFailed = "Failed";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // STJ in net8 handles DateOnly + records out of the box.
+    };
+
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IDbContextFactory<SignavexDbContext> _dbFactory;
     private readonly ILogger<QuantbackRunnerService> _logger;
-    private readonly object _lock = new();
 
-    private PortfolioBacktestResult? _latestResult;
-    private PortfolioBacktestRequest? _runningRequest;
-    private bool _isRunning;
-    private string? _lastError;
-    private DateTime? _runStartedAt;
-
-    public QuantbackRunnerService(IServiceScopeFactory scopeFactory, ILogger<QuantbackRunnerService> logger)
+    public QuantbackRunnerService(
+        IServiceScopeFactory scopeFactory,
+        IDbContextFactory<SignavexDbContext> dbFactory,
+        ILogger<QuantbackRunnerService> logger)
     {
         _scopeFactory = scopeFactory;
+        _dbFactory = dbFactory;
         _logger = logger;
     }
 
-    public PortfolioBacktestResult? LatestResult { get { lock (_lock) return _latestResult; } }
-    public PortfolioBacktestRequest? RunningRequest { get { lock (_lock) return _runningRequest; } }
-    public bool IsRunning { get { lock (_lock) return _isRunning; } }
-    public string? LastError { get { lock (_lock) return _lastError; } }
-    public DateTime? RunStartedAt { get { lock (_lock) return _runStartedAt; } }
+    /// <summary>
+    /// Latest run for a user, regardless of status. Used by the page to
+    /// render either the in-flight banner or the completed result.
+    /// </summary>
+    public async Task<QuantbackRunSummary?> GetLatestRunAsync(string userId, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var entity = await db.QuantbackRuns
+            .Where(x => x.UserId == userId)
+            .OrderByDescending(x => x.StartedAtUtc)
+            .FirstOrDefaultAsync(ct);
+
+        return entity is null ? null : Hydrate(entity);
+    }
 
     /// <summary>
-    /// Kicks off a backtest in the background. Returns immediately. Caller
-    /// should poll <see cref="IsRunning"/>/<see cref="LatestResult"/> for
-    /// completion. Returns <c>false</c> if a run is already in flight.
+    /// Kicks off a backtest in the background tagged with <paramref name="userId"/>.
+    /// Returns false if this user already has a Running row (rate-limit:
+    /// one in-flight per account).
     /// </summary>
-    public bool TryStartRun(PortfolioBacktestRequest request)
+    public async Task<bool> TryStartRunAsync(string userId, PortfolioBacktestRequest request, CancellationToken ct = default)
     {
-        lock (_lock)
+        await using (var db = await _dbFactory.CreateDbContextAsync(ct))
         {
-            if (_isRunning) return false;
-            _isRunning = true;
-            _runningRequest = request;
-            _lastError = null;
-            _runStartedAt = DateTime.UtcNow;
+            var alreadyRunning = await db.QuantbackRuns
+                .AnyAsync(x => x.UserId == userId && x.Status == StatusRunning, ct);
+            if (alreadyRunning)
+            {
+                _logger.LogInformation("Quantback start refused for {UserId} — a run is already in flight.", userId);
+                return false;
+            }
+
+            var row = new QuantbackRunEntity
+            {
+                UserId = userId,
+                Status = StatusRunning,
+                StartedAtUtc = DateTime.UtcNow,
+                RequestJson = JsonSerializer.Serialize(request, JsonOptions),
+            };
+            db.QuantbackRuns.Add(row);
+            await db.SaveChangesAsync(ct);
+
+            // Fire-and-forget. The background task uses its own scope and
+            // updates the row on completion. We deliberately don't await so
+            // the form POST returns quickly.
+            _ = Task.Run(() => RunBackgroundAsync(row.Id, request, userId));
         }
-
-        // Fire-and-forget. Errors land in _lastError; we deliberately don't
-        // await this so the form POST returns quickly.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var backtester = scope.ServiceProvider.GetRequiredService<IPortfolioBacktester>();
-                var result = await backtester.RunAsync(request);
-
-                lock (_lock) { _latestResult = result; }
-                _logger.LogInformation(
-                    "Quantback completed: {TradeCount} trades, total return {Return:P2}",
-                    result.Trades.Count, result.Metrics.TotalReturnPct);
-            }
-            catch (Exception ex)
-            {
-                lock (_lock) { _lastError = ex.Message; }
-                _logger.LogError(ex, "Quantback failed");
-            }
-            finally
-            {
-                lock (_lock) { _isRunning = false; _runningRequest = null; }
-            }
-        });
-
         return true;
     }
+
+    private async Task RunBackgroundAsync(int runId, PortfolioBacktestRequest request, string userId)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var backtester = scope.ServiceProvider.GetRequiredService<IPortfolioBacktester>();
+            var result = await backtester.RunAsync(request);
+
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            var row = await db.QuantbackRuns.FindAsync(runId);
+            if (row is null) return;
+            row.Status = StatusComplete;
+            row.CompletedAtUtc = DateTime.UtcNow;
+            row.ResultJson = JsonSerializer.Serialize(result, JsonOptions);
+            await db.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Quantback complete for {UserId} (run {RunId}): {TradeCount} trades, total return {Return:P2}",
+                userId, runId, result.Trades.Count, result.Metrics.TotalReturnPct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Quantback failed for {UserId} (run {RunId})", userId, runId);
+            try
+            {
+                await using var db = await _dbFactory.CreateDbContextAsync();
+                var row = await db.QuantbackRuns.FindAsync(runId);
+                if (row is not null)
+                {
+                    row.Status = StatusFailed;
+                    row.CompletedAtUtc = DateTime.UtcNow;
+                    row.Error = ex.Message;
+                    await db.SaveChangesAsync();
+                }
+            }
+            catch (Exception inner)
+            {
+                _logger.LogError(inner, "Failed to record Quantback failure for run {RunId}", runId);
+            }
+        }
+    }
+
+    private static QuantbackRunSummary Hydrate(QuantbackRunEntity entity)
+    {
+        PortfolioBacktestRequest? request = null;
+        try { request = JsonSerializer.Deserialize<PortfolioBacktestRequest>(entity.RequestJson, JsonOptions); }
+        catch { /* malformed; treat as null */ }
+
+        PortfolioBacktestResult? result = null;
+        if (entity.Status == StatusComplete && !string.IsNullOrEmpty(entity.ResultJson))
+        {
+            try { result = JsonSerializer.Deserialize<PortfolioBacktestResult>(entity.ResultJson, JsonOptions); }
+            catch { /* malformed; treat as null */ }
+        }
+
+        return new QuantbackRunSummary(
+            Id: entity.Id,
+            Status: entity.Status,
+            StartedAtUtc: entity.StartedAtUtc,
+            CompletedAtUtc: entity.CompletedAtUtc,
+            Request: request,
+            Result: result,
+            Error: entity.Error);
+    }
+}
+
+/// <summary>UI-facing summary of a single Quantback run row.</summary>
+public record QuantbackRunSummary(
+    int Id,
+    string Status,
+    DateTime StartedAtUtc,
+    DateTime? CompletedAtUtc,
+    PortfolioBacktestRequest? Request,
+    PortfolioBacktestResult? Result,
+    string? Error
+)
+{
+    public bool IsRunning => Status == "Running";
+    public bool IsComplete => Status == "Complete";
+    public bool IsFailed => Status == "Failed";
 }

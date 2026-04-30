@@ -95,7 +95,7 @@ Cold-cache UX is addressed in Q6 (defer interactive run until cache is warm, or 
 - [x] **Q6.6** Per-ticker breakdown + monthly P&L tables side-by-side.
 - [x] **Q6.x** `QuantbackRunnerService` (singleton) holds latest result + `IsRunning` + `LastError`; admin form fires-and-forgets via `TryStartRun(request)` so the POST returns immediately.
 - [x] **Q6.x** Nav link added (Pro badge for Free users).
-- [ ] **Q6.7** ~~Save scenario~~ — deferred to follow-up. The admin form is trivial to re-fill so the value of named-scenario persistence is low until there are many users.
+- [x] **Q6.7** **Per-user persistence** (replaced "save scenario" — same need, more durable approach). Each run is now a row in `QuantbackRuns` keyed by user id. Survives App Service restarts, sleeps, and deploys. Endpoint moved from `/admin/run-quantback` (Admin-only, singleton state) to `/quantback/run` (Pro+Admin, per-user). One in-flight run per user (rate-limit). Page reads the calling user's latest row from DB on each render — refresh to see status updates.
 
 **Exit criteria met (modulo Q6.7):** Pro users land on `/quantback`, see metrics cards + equity chart + trade log + per-ticker + monthly P&L. Admins additionally see a form to kick off new runs; runs execute in the background so the form POST returns immediately.
 

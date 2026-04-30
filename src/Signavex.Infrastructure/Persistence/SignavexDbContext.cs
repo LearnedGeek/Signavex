@@ -18,6 +18,7 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<DailyBriefEntity> DailyBriefs => Set<DailyBriefEntity>();
     public DbSet<FundamentalsCacheEntity> FundamentalsCache => Set<FundamentalsCacheEntity>();
     public DbSet<HistoricalOhlcvEntity> HistoricalOhlcv => Set<HistoricalOhlcvEntity>();
+    public DbSet<QuantbackRunEntity> QuantbackRuns => Set<QuantbackRunEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -111,6 +112,20 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.High).HasPrecision(18, 4);
             e.Property(x => x.Low).HasPrecision(18, 4);
             e.Property(x => x.Close).HasPrecision(18, 4);
+        });
+
+        modelBuilder.Entity<QuantbackRunEntity>(e =>
+        {
+            e.ToTable("QuantbackRuns");
+            e.HasKey(x => x.Id);
+            // Most queries are "latest run for a given user" — composite index
+            // covers the lookup; UserId-only index covers run-history listings.
+            e.HasIndex(x => new { x.UserId, x.StartedAtUtc });
+            e.Property(x => x.UserId).IsRequired();
+            e.Property(x => x.Status).IsRequired().HasMaxLength(16);
+            // Result JSON can be sizable for multi-year runs; nvarchar(max) is
+            // appropriate. EF maps `string?` to nvarchar(max) by default on
+            // SQL Server, so no explicit config needed.
         });
     }
 }
