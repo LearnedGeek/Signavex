@@ -33,14 +33,25 @@ Portfolio-simulation backtest. Extends Signavex's point-in-time `/backtest` page
 
 ---
 
-## Q3 — Historical OHLCV pipeline
-- [ ] **Q3.1** Extend `PolygonMarketDataProvider` for multi-year ranges (paged if needed)
-- [ ] **Q3.2** Verify adjusted-close behavior — Polygon's `/v2/aggs` `adjusted=true` flag
-- [ ] **Q3.3** Add a separate cache lane for historical data (longer TTL than 15min, larger key space)
-- [ ] **Q3.4** Bulk-fetch helper: given universe + date range, return per-ticker OHLCV
-- [ ] **Q3.5** Cost analysis: free tier 5 req/min → estimate scan time for 5y × 900 tickers
+## Q3 — Historical OHLCV pipeline ✅
+- [x] **Q3.1** New `IHistoricalOhlcvProvider` interface in Domain — separate from `IMarketDataProvider` because cache characteristics are different (DB-persisted, no TTL for past dates)
+- [x] **Q3.2** `PolygonHistoricalOhlcvProvider` uses `/v2/aggs` with explicit date range, `adjusted=true`, `limit=50000` (one call covers 5+ years per ticker)
+- [x] **Q3.3** `HistoricalOhlcvEntity` + `AddHistoricalOhlcv` migration (table with unique index on `(Ticker, TradingDate)`, decimal(18,4) for prices)
+- [x] **Q3.4** `DbCachedHistoricalOhlcvProvider` decorator — checks DB first, fetches on cold/stale (14-day coverage tolerance from latest cached date to requested `to`), upserts results
+- [x] **Q3.5** DI wired: `IHistoricalOhlcvProvider → DbCachedHistoricalOhlcvProvider(PolygonHistoricalOhlcvProvider)`. Reuses existing `PolygonRateLimitingHandler` so the free-tier 5/min ceiling is enforced automatically.
+- [x] **Q3.6** Tests: 4 Polygon (URL construction, bar parsing, inverted range, http error) + 6 cache (cold fetch+persist, warm hit, stale refetch with upsert dedup, inner-empty fallback, inverted range short-circuit, etc.)
 
-**Exit criteria:** can fetch 5 years of adjusted OHLCV for an arbitrary ticker. Cache survives a worker restart. Documented runtime cost for full universe.
+**Exit criteria met:** can fetch 5 years of adjusted OHLCV for any ticker via DI. Cache survives worker restart (rows persist in `HistoricalOhlcv` table). Repeat backtests on same ticker hit DB only — zero Polygon calls until a stale-coverage trigger.
+
+**Runtime cost on free tier (5 req/min):**
+| Universe | Cold-cache time | Warm-cache time |
+|---|---|---|
+| 50 tickers | ~10 min | seconds |
+| 100 tickers | ~20 min | seconds |
+| S&P 500 only | ~100 min | seconds |
+| S&P 500+400 (~900) | ~3 hours | seconds |
+
+Cold-cache UX is addressed in Q6 (defer interactive run until cache is warm, or scope to smaller universe for first iteration).
 
 ---
 

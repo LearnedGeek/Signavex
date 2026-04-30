@@ -83,6 +83,21 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachedNewsProvider>()));
 
+        // Quantback historical OHLCV — separate cache lane from the live scan
+        // path because past trading days never change once cached. The DB
+        // decorator queries persisted bars first and only falls through to
+        // Polygon on miss/stale, which keeps free-tier rate-limit usage low
+        // across repeat backtests.
+        services.AddHttpClient<PolygonHistoricalOhlcvProvider>(client =>
+        {
+            client.BaseAddress = new Uri(providerOptions.Polygon.BaseUrl);
+        }).AddHttpMessageHandler<PolygonRateLimitingHandler>();
+        services.AddScoped<IHistoricalOhlcvProvider>(sp =>
+            new DbCachedHistoricalOhlcvProvider(
+                sp.GetRequiredService<PolygonHistoricalOhlcvProvider>(),
+                sp.GetRequiredService<IDbContextFactory<SignavexDbContext>>(),
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<DbCachedHistoricalOhlcvProvider>()));
+
         // Register AlphaVantage as the inner provider, then wrap with DB-backed caching decorator
         services.AddHttpClient<AlphaVantageFundamentalsProvider>(client =>
         {

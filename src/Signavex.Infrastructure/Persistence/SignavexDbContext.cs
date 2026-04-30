@@ -17,6 +17,7 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<EconomicSyncTrackerEntity> EconomicSyncTrackers => Set<EconomicSyncTrackerEntity>();
     public DbSet<DailyBriefEntity> DailyBriefs => Set<DailyBriefEntity>();
     public DbSet<FundamentalsCacheEntity> FundamentalsCache => Set<FundamentalsCacheEntity>();
+    public DbSet<HistoricalOhlcvEntity> HistoricalOhlcv => Set<HistoricalOhlcvEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -97,6 +98,19 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Ticker).IsUnique();
             e.HasIndex(x => x.RetrievedAtUtc);
+        });
+
+        modelBuilder.Entity<HistoricalOhlcvEntity>(e =>
+        {
+            e.ToTable("HistoricalOhlcv");
+            e.HasKey(x => x.Id);
+            // (Ticker, TradingDate) is the natural lookup key — covered by a
+            // unique index so DB enforces no duplicates and queries are fast.
+            e.HasIndex(x => new { x.Ticker, x.TradingDate }).IsUnique();
+            e.Property(x => x.Open).HasPrecision(18, 4);
+            e.Property(x => x.High).HasPrecision(18, 4);
+            e.Property(x => x.Low).HasPrecision(18, 4);
+            e.Property(x => x.Close).HasPrecision(18, 4);
         });
     }
 }
