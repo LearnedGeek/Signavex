@@ -55,14 +55,20 @@ Cold-cache UX is addressed in Q6 (defer interactive run until cache is warm, or 
 
 ---
 
-## Q4 — Trade execution loop
-- [ ] **Q4.1** Strategy parameters: position size %, max per-ticker %, stop-loss %, take-profit %, signal-reversal exit
-- [ ] **Q4.2** Per-day simulation step: score universe, open/close positions per rules, update equity
-- [ ] **Q4.3** Trade log capture: entry/exit dates, prices, P&L per trade
-- [ ] **Q4.4** Reuse `ScanEngine` for daily scoring — no parallel scoring code path
-- [ ] **Q4.5** Tests with synthetic OHLCV + canned scores to verify entry/exit/sizing rules
+## Q4 — Trade execution loop ✅
+- [x] **Q4.1** `StrategyParameters` already shipped in Q1 (5/20/8/20 + signal-reversal flag + min-score)
+- [x] **Q4.2** Day-by-day loop: pre-fetch OHLCV → derive trading days → for each day, score universe, process exits, open entries, snapshot equity
+- [x] **Q4.3** Trade log captures entry/exit dates, prices, exit reason, realized P&L; force-closes remaining positions at last day with `EndOfBacktest` reason
+- [x] **Q4.4** Composes `IEnumerable<IStockSignal>` + `ScoreCalculator` directly (same primitives `StockEvaluator` uses) — no scoring duplication
+- [x] **Q4.5** 9 tests cover: empty universe, threshold-gated entries, position sizing, stop-loss intraday low, take-profit intraday high, signal-reversal exit, end-of-backtest cleanup, basic metrics counts, DI resolution
+- [x] **Q4.6** Same-day re-entry guard: a ticker exited today is skipped for entry that same day (avoids whipsaw — if signal still says buy tomorrow, we re-enter then)
 
-**Exit criteria:** backtest produces a non-empty trade log + equity curve for a small ticker set. Numbers reproducible across runs (deterministic).
+**Caveats (deliberate scope limits):**
+- Scoring uses live `IStockSignal` set against per-day-trimmed OHLCV. Fundamentals + sentiment + market signals receive null/empty inputs and self-report unavailable, so the score is technical-only. Historical fundamentals + news replay is out of scope until that data is available.
+- No market-context multiplier applied. Historical macro replay isn't wired up.
+- Stop-loss wins ties when both stop and target trigger on the same day (conservative).
+
+**Exit criteria met:** backtest produces non-empty trade log + equity curve for small ticker sets in tests. Deterministic — same inputs produce same outputs.
 
 ---
 
