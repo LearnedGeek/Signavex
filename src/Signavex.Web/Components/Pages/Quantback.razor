@@ -63,14 +63,24 @@
                 </div>
                 <div class="flex flex-col gap-1">
                     <label class="text-xs text-on-surface-variant">Universe</label>
-                    <select name="universe" class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5">
+                    <select name="universe"
+                            class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5"
+                            onchange="document.getElementById('custom-tickers-row').classList.toggle('hidden', this.value !== 'custom')">
                         <option value="top10" selected>Top 10 S&amp;P</option>
+                        <option value="mag7">Magnificent 7</option>
                         <option value="fang">FAANG</option>
+                        <option value="custom">Custom tickers…</option>
                     </select>
+                </div>
+                <div id="custom-tickers-row" class="hidden flex flex-col gap-1">
+                    <label class="text-xs text-on-surface-variant">Tickers (comma-separated)</label>
+                    <input type="text" name="customTickers" placeholder="MSFT, AAPL, NVDA"
+                           maxlength="200"
+                           class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-64" />
                 </div>
                 <div class="flex flex-col gap-1">
                     <label class="text-xs text-on-surface-variant">Starting capital</label>
-                    <input type="number" name="startingCapital" value="100000" min="1000" step="1000"
+                    <input type="number" name="startingCapital" value="100000" min="100" step="100"
                            class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-32" />
                 </div>
                 <button type="submit" disabled="@(_latest is { IsRunning: true })"
@@ -78,7 +88,10 @@
                     @(_latest is { IsRunning: true } ? "Running…" : "Run")
                 </button>
             </form>
-            <p class="text-xs text-on-surface-variant mt-2">One run at a time per account. The first run on a cold cache hits the Polygon API at 5 req/min — small universes finish faster.</p>
+            <p class="text-xs text-on-surface-variant mt-2">
+                One run at a time per account. Cold cache hits the Polygon API at 5 req/min — small universes finish faster.
+                Polygon's free tier provides ~2 years of EOD history; date ranges beyond that get truncated.
+            </p>
         </div>
 
         @if (_latest is { IsComplete: true, Result: { } result })

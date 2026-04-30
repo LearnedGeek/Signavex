@@ -479,6 +479,7 @@ app.MapPost("/quantback/run", async (QuantbackRunnerService runner, HttpContext 
     var endStr = form["endDate"].ToString();
     var universeStr = form["universe"].ToString();
     var capitalStr = form["startingCapital"].ToString();
+    var customTickersStr = form["customTickers"].ToString();
 
     var start = DateOnly.TryParse(startStr, out var s) ? s : DateOnly.FromDateTime(DateTime.Today.AddYears(-1));
     var end = DateOnly.TryParse(endStr, out var e) ? e : DateOnly.FromDateTime(DateTime.Today);
@@ -486,12 +487,35 @@ app.MapPost("/quantback/run", async (QuantbackRunnerService runner, HttpContext 
 
     // Universe presets — keep this short; users on free tier will hit rate
     // limits on large universes anyway.
+    // Whitelist tickers to alphanumeric uppercase, dedupe, drop empties.
+    // Matches Polygon's symbol format (typically 1–5 letters, sometimes a
+    // dot or hyphen — we strip those defensively to keep this simple).
+    static string[] ParseCustomTickers(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
+        return raw
+            .Split(new[] { ',', ' ', '\t', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => new string(t.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant())
+            .Where(t => t.Length is >= 1 and <= 6)
+            .Distinct()
+            .ToArray();
+    }
+
     string[] universe = universeStr switch
     {
-        "top10" => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
-        "fang"  => new[] { "META", "AMZN", "AAPL", "NFLX", "GOOGL" },
-        _       => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
+        "top10"  => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
+        "mag7"   => new[] { "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA" },
+        "fang"   => new[] { "META", "AMZN", "AAPL", "NFLX", "GOOGL" },
+        "custom" => ParseCustomTickers(customTickersStr),
+        _        => new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" },
     };
+
+    // Cap arbitrary input at 20 tickers — protects free-tier rate limit
+    // budget from accidental abuse and matches "small universe" guidance.
+    if (universe.Length == 0)
+        universe = new[] { "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM", "V", "WMT" };
+    if (universe.Length > 20)
+        universe = universe.Take(20).ToArray();
 
     var strategy = Signavex.Domain.Models.Portfolio.StrategyParameters.Default;
     var request = new Signavex.Domain.Models.Portfolio.PortfolioBacktestRequest(
