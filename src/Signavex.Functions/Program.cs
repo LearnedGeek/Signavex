@@ -47,6 +47,7 @@ var host = new HostBuilder()
         services.AddSingleton<EconomicSyncOrchestrator>();
         services.AddSingleton<FundamentalsBackfillOrchestrator>();
         services.AddSingleton<PickOutcomeEvaluatorOrchestrator>();
+        services.AddSingleton<PickOutcomeBackfillOrchestrator>();
 
         // Admin authorization — checks x-signavex-admin-key header on HTTP-triggered admin ops
         services.AddSingleton<AdminKeyAuthorizer>();
