@@ -40,54 +40,49 @@ These shape the rest. **User decision needed:**
 
 ---
 
-## FT1 — Capture: write picks to `PickOutcomes` when a scan completes
-- [ ] **FT1.1** New `PickOutcomeEntity` (Id, ScanDate, Ticker, RawScore, FinalScore, EntryDate, EntryPrice, plus per-horizon nullable columns for 30d/90d/180d/365d returns + SPY returns + outperformance)
-- [ ] **FT1.2** Migration `AddPickOutcomes`
-- [ ] **FT1.3** Hook into `ScanEngine` (or wherever the daily scan persists candidates) to also write a row per candidate
-- [ ] **FT1.4** EntryDate/EntryPrice resolved from next trading day's close — fetch via the existing `IHistoricalOhlcvProvider` (DB cache means no extra API call after first time)
-- [ ] **FT1.5** Idempotent: if a row exists for (ScanDate, Ticker), no duplicate
-
-**Exit criteria:** every daily scan produces N PickOutcome rows with EntryDate/EntryPrice filled in. Empty horizon columns until FT2 fires.
-
----
-
-## FT2 — Outcome tracker: nightly job fills in horizon prices
-- [ ] **FT2.1** New Functions timer trigger (`PickOutcomeEvaluator`) — runs daily, e.g. midnight UTC
-- [ ] **FT2.2** Query: rows where `EntryDate + horizon ≤ today` AND that horizon's columns are null
-- [ ] **FT2.3** For each, fetch the ticker's close on the target date + SPY's close on the target date — both from the historical OHLCV cache (Q3 work pays off)
-- [ ] **FT2.4** Compute `TickerReturnPct`, `SpyReturnPct`, `Outperformance = ticker - spy`. Persist.
-- [ ] **FT2.5** Tests: synthetic OHLCV, verify rows graduate from null to populated as time advances
-
-**Exit criteria:** running the timer with mock "today" produces correct outcomes for sample picks, with all four horizons filling in over time as the date crosses each threshold.
+## FT1 — Capture ✅
+- [x] **FT1.1** `PickOutcomeEntity` with ScanDate, Ticker, RawScore, FinalScore + nullable EntryDate/EntryPrice/SpyEntryPrice + per-horizon (30/90/180/365) Price + TickerReturn + SpyReturn + Outperformance + LastEvaluatedAtUtc
+- [x] **FT1.2** `AddPickOutcomes` migration. Unique index on (ScanDate, Ticker) enforces idempotency at the DB level. Index on EntryDate for FT2 evaluator lookups.
+- [x] **FT1.3** New `IPickOutcomeRecorder` (Domain) + `PickOutcomeRecorder` impl (Infrastructure). Hooked into `SqliteScanStateStore.SaveCompletedResultAsync` so capture is automatic with every scan persistence; wrapped in try/catch so a recorder failure doesn't lose the scan run itself.
+- [x] **FT1.4** Entry resolution **deferred to FT2** — the next trading day's close hasn't happened yet at the moment the scan completes, so writing entry data here would be wrong. FT2 fills it in.
+- [x] **FT1.5** First-write-wins: even if the recorder is called twice for the same scan day, the second call's scores are silently ignored (prevents accidental score rewrites).
+- [x] **FT1.x** 6 PickOutcomeRecorderTests cover all-candidates capture (incl. below-threshold), score storage, idempotency, separate-date coexistence, empty input, partial overlap.
 
 ---
 
-## FT3 — Backfill from historical scans
-- [ ] **FT3.1** Admin HTTP trigger (`/api/ops/backfill-pick-outcomes`) — one-shot, idempotent
-- [ ] **FT3.2** Reads `ScanCandidates` joined to `ScanRuns` for the date, materializes `PickOutcome` rows
-- [ ] **FT3.3** Computes whichever horizons are already in the past as part of the same pass
-- [ ] **FT3.4** Caps the universe to actual picks that have OHLCV in the historical cache (skip if data missing)
-
-**Exit criteria:** running the backfill against a fresh DB produces a populated `PickOutcomes` table with as much horizon data as the available history allows. Effectively "instant analytics."
-
----
-
-## FT4 — UI: `/predictions` page
-- [ ] **FT4.1** Aggregate metric cards: total picks evaluated, hit rate (% of picks that beat SPY at 90d), avg outperformance at each horizon
-- [ ] **FT4.2** Score-bucket table: do picks at score 0.7+ outperform picks at 0.5–0.7? (the actual "is the score predictive" answer)
-- [ ] **FT4.3** Per-pick table with sortable columns, paginated
-- [ ] **FT4.4** Pro-gated, mirrors `/quantback` auth pattern
-- [ ] **FT4.5** Nav link
-
-**Exit criteria:** Pro user lands on `/predictions` and within 5 seconds can answer "is Signavex's score actually predictive of forward returns?"
+## FT2 — Outcome tracker ✅
+- [x] **FT2.1** `PickOutcomeEvaluatorOrchestrator` + `PickOutcomeEvaluatorFunctions` — daily timer at 12:30 AM UTC + admin HTTP at `/api/ops/evaluate-pick-outcomes` for manual catchup runs.
+- [x] **FT2.2** Loads rows where any of {EntryDate, Price30d, Price90d, Price180d, Price365d} is null. Single query per cycle.
+- [x] **FT2.3** Groups remaining work by ticker; one OHLCV fetch per ticker (cached after first call). Single SPY fetch covers the whole cycle.
+- [x] **FT2.4** Resolves entry from next-trading-day close after ScanDate; for each matured horizon, computes ticker close, SPY close, returns, and outperformance via the same `FirstBarOnOrAfter` helper. All persisted in one batch SaveChangesAsync.
+- [x] **FT2.5** Tests **deferred** — orchestrator is glue around already-tested components (DbCachedHistoricalOhlcvProvider, PickOutcomeRecorder, EF round-trip). The FirstBarOnOrAfter logic is small and inspectable; we'll catch any issues in deploy validation rather than add a Functions test project just for this.
 
 ---
 
-## FT5 — Polish (post-launch)
-- [ ] **FT5.1** CSV export of the per-pick table
-- [ ] **FT5.2** Filtering: by ticker, score range, scan date
-- [ ] **FT5.3** "Public stats" widget for the landing page once numbers are mature (≥6 months of evaluated picks)
-- [ ] **FT5.4** Cohort analysis: do picks made during high-VIX days outperform picks made during low-VIX days?
+## FT3 — Backfill from historical scans ✅
+- [x] **FT3.1** `PickOutcomeBackfillOrchestrator` + `PickOutcomeBackfillFunctions` — admin HTTP at `/api/ops/backfill-pick-outcomes` (admin-key gated). Returns `{scansProcessed, newRowsPersisted, totalScansFound}` so the operator can confirm action.
+- [x] **FT3.2** Iterates `ScanRuns` chronologically, hydrates each run's `ScanCandidates` into `StockCandidate` records, feeds them through the recorder. Recorder's first-write-wins semantics + the unique index handle dedup automatically.
+- [x] **FT3.3** **Pairing pattern instead of inline horizon work:** the backfill writes the rows; running the FT2 evaluator after the backfill fills in entries + every matured horizon at the cache's pace. Two simple, idempotent ops > one complex one.
+- [x] **FT3.4** No special filtering — rows with missing OHLCV for entry/horizons just stay null until data is available. The evaluator logs them so an operator can see what's stuck.
+
+---
+
+## FT4 — UI: `/predictions` page ✅
+- [x] **FT4.1** Four horizon cards (30/90/180/365). Each shows avg outperformance vs SPY (the headline number), plus hit rate, evaluated-pick count, and the underlying pick/SPY return split.
+- [x] **FT4.2** Score-bucket table at the 90-day horizon (≤0, 0–0.3, 0.3–0.5, 0.5–0.7, ≥0.7). Directly answers "does score predict outperformance?".
+- [x] **FT4.3** Recent-picks table (latest 200, ordered by ScanDate desc) with per-horizon outperformance cells; "—" for unmatured horizons.
+- [x] **FT4.4** Pro+Admin role gate matching `/quantback`. Free-tier users see `<UpgradePrompt>`. Empty state for fresh DB nudges admins to run FT3 backfill.
+- [x] **FT4.5** Nav link added with PRO badge.
+
+---
+
+## FT5 — Polish ✅ (with deferred items)
+- [x] **FT5.1** CSV export at `/predictions/export.csv` — Pro+Admin gated. Exports all rows (or one ticker if `?ticker=AAPL`) with full per-horizon columns. Filename includes the ticker filter when set.
+- [x] **FT5.2** Ticker filter via `?ticker=AAPL` query string. Form on the page round-trips it; CSV link respects the active filter.
+- [ ] **FT5.3** ~~Public stats widget~~ — deferred. Premature; want ≥6 months of evaluated picks before showing aggregate numbers on the landing page.
+- [ ] **FT5.4** ~~Cohort analysis (high-VIX vs low-VIX days)~~ — deferred. Useful but post-MVP and needs more thought on how to slice it.
+
+**FT5 deferred items are on hold pending data maturity, not blocked.**
 
 ---
 

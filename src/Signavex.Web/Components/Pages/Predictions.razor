@@ -14,6 +14,30 @@
                 Forward-test results — every pick the system has made, graded against SPY at 30/90/180/365-day horizons.
             </p>
         </div>
+        @if (_isPro)
+        {
+            <div class="flex items-end gap-2">
+                <form method="get" action="/predictions" class="flex items-end gap-2">
+                    <div class="flex flex-col gap-1">
+                        <label class="text-xs text-on-surface-variant">Filter by ticker</label>
+                        <input type="text" name="ticker" value="@Ticker" placeholder="e.g. AAPL"
+                               maxlength="10"
+                               class="rounded-[var(--radius-xs)] border border-outline bg-surface px-2 py-1.5 w-32 text-sm" />
+                    </div>
+                    <button type="submit"
+                            class="rounded-[var(--radius-sm)] border border-outline px-3 py-2 text-sm font-medium hover:bg-surface-container">
+                        Filter
+                    </button>
+                </form>
+                <a href="@($"/predictions/export.csv{(string.IsNullOrEmpty(Ticker) ? "" : "?ticker=" + Ticker)}")"
+                   class="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-outline px-3 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container no-underline">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    CSV
+                </a>
+            </div>
+        }
     </div>
 
     @if (!_isPro)
@@ -148,6 +172,8 @@
 <Disclaimer />
 
 @code {
+    [SupplyParameterFromQuery] public string? Ticker { get; set; }
+
     private bool _isPro;
     private PredictionsDashboard? _dashboard;
 
@@ -157,7 +183,7 @@
         _isPro = authState.User.IsInRole("Pro") || authState.User.IsInRole("Admin");
 
         if (_isPro)
-            _dashboard = await Dashboard.GetDashboardAsync();
+            _dashboard = await Dashboard.GetDashboardAsync(Ticker);
     }
 
     private static string FormatPct(double v) => $"{v:+0.0%;-0.0%;0.0%}";

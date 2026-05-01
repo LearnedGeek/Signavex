@@ -557,6 +557,16 @@ app.MapGet("/backtest/export.csv", (BacktestRunnerService backtest) =>
     return Results.File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", fileName);
 }).RequireAuthorization();
 
+// FT5: predictions CSV export. Pro+Admin only — same audience as the
+// /predictions page itself. Optional `?ticker=AAPL` filters to one symbol.
+app.MapGet("/predictions/export.csv", async (PredictionsDashboardService dashboard, string? ticker, CancellationToken ct) =>
+{
+    var csv = await dashboard.ExportCsvAsync(ticker, ct);
+    var suffix = string.IsNullOrEmpty(ticker) ? "" : $"-{ticker.ToUpperInvariant()}";
+    var fileName = $"signavex-predictions{suffix}-{DateTime.UtcNow:yyyy-MM-dd}.csv";
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", fileName);
+}).RequireAuthorization(policy => policy.RequireRole("Pro", "Admin"));
+
 app.MapRazorComponents<App>();
 
 app.Run();

@@ -19,21 +19,76 @@ public class PredictionsDashboardService
         _dbFactory = dbFactory;
     }
 
-    public async Task<PredictionsDashboard> GetDashboardAsync(CancellationToken ct = default)
+    public async Task<PredictionsDashboard> GetDashboardAsync(string? tickerFilter = null, CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
-        var rows = await db.PickOutcomes
-            .AsNoTracking()
+        var query = db.PickOutcomes.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(tickerFilter))
+        {
+            var ticker = tickerFilter.Trim().ToUpperInvariant();
+            query = query.Where(p => p.Ticker == ticker);
+        }
+
+        var rows = await query
             .OrderByDescending(p => p.ScanDate)
             .ToListAsync(ct);
 
         return new PredictionsDashboard(
             TotalRows: rows.Count,
             EvaluatedRows: rows.Count(p => p.EntryDate is not null),
+            TickerFilter: tickerFilter,
             HorizonStats: BuildHorizonStats(rows),
             ScoreBuckets: BuildScoreBuckets(rows),
             RecentPicks: rows.Take(200).Select(MapToRow).ToList());
+    }
+
+    /// <summary>
+    /// Streams all rows (respecting the optional ticker filter) as a CSV
+    /// string. Used by the FT5 export endpoint.
+    /// </summary>
+    public async Task<string> ExportCsvAsync(string? tickerFilter = null, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var query = db.PickOutcomes.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(tickerFilter))
+        {
+            var ticker = tickerFilter.Trim().ToUpperInvariant();
+            query = query.Where(p => p.Ticker == ticker);
+        }
+
+        var rows = await query.OrderByDescending(p => p.ScanDate).ToListAsync(ct);
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("ScanDate,Ticker,FinalScore,EntryDate,EntryPrice,SpyEntryPrice," +
+                      "TickerReturn30d,SpyReturn30d,Outperformance30d," +
+                      "TickerReturn90d,SpyReturn90d,Outperformance90d," +
+                      "TickerReturn180d,SpyReturn180d,Outperformance180d," +
+                      "TickerReturn365d,SpyReturn365d,Outperformance365d");
+
+        foreach (var r in rows)
+        {
+            sb.Append(r.ScanDate.ToString("yyyy-MM-dd")).Append(',');
+            sb.Append(r.Ticker).Append(',');
+            sb.Append(r.FinalScore.ToString("F4")).Append(',');
+            sb.Append(r.EntryDate?.ToString("yyyy-MM-dd") ?? "").Append(',');
+            sb.Append(r.EntryPrice?.ToString("F4") ?? "").Append(',');
+            sb.Append(r.SpyEntryPrice?.ToString("F4") ?? "").Append(',');
+            sb.Append(r.TickerReturn30d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.SpyReturn30d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.Outperformance30d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.TickerReturn90d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.SpyReturn90d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.Outperformance90d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.TickerReturn180d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.SpyReturn180d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.Outperformance180d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.TickerReturn365d?.ToString("F6") ?? "").Append(',');
+            sb.Append(r.SpyReturn365d?.ToString("F6") ?? "").Append(',');
+            sb.AppendLine(r.Outperformance365d?.ToString("F6") ?? "");
+        }
+
+        return sb.ToString();
     }
 
     private static IReadOnlyList<HorizonStat> BuildHorizonStats(IReadOnlyList<PickOutcomeEntity> rows)
@@ -117,6 +172,7 @@ public class PredictionsDashboardService
 public record PredictionsDashboard(
     int TotalRows,
     int EvaluatedRows,
+    string? TickerFilter,
     IReadOnlyList<HorizonStat> HorizonStats,
     IReadOnlyList<ScoreBucket> ScoreBuckets,
     IReadOnlyList<PickRow> RecentPicks);
