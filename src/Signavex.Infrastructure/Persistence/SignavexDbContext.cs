@@ -19,6 +19,7 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<FundamentalsCacheEntity> FundamentalsCache => Set<FundamentalsCacheEntity>();
     public DbSet<HistoricalOhlcvEntity> HistoricalOhlcv => Set<HistoricalOhlcvEntity>();
     public DbSet<QuantbackRunEntity> QuantbackRuns => Set<QuantbackRunEntity>();
+    public DbSet<PickOutcomeEntity> PickOutcomes => Set<PickOutcomeEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -126,6 +127,26 @@ public class SignavexDbContext : IdentityDbContext<ApplicationUser>
             // Result JSON can be sizable for multi-year runs; nvarchar(max) is
             // appropriate. EF maps `string?` to nvarchar(max) by default on
             // SQL Server, so no explicit config needed.
+        });
+
+        modelBuilder.Entity<PickOutcomeEntity>(e =>
+        {
+            e.ToTable("PickOutcomes");
+            e.HasKey(x => x.Id);
+            // (ScanDate, Ticker) is the natural lookup key — also enforces
+            // FT1 idempotency (one row per scan per ticker) without needing
+            // app-level dedup logic.
+            e.HasIndex(x => new { x.ScanDate, x.Ticker }).IsUnique();
+            // Aggregate queries scan by EntryDate + horizon — index helps the
+            // nightly evaluator efficiently find rows due for grading.
+            e.HasIndex(x => x.EntryDate);
+            e.Property(x => x.Ticker).IsRequired();
+            e.Property(x => x.EntryPrice).HasPrecision(18, 4);
+            e.Property(x => x.SpyEntryPrice).HasPrecision(18, 4);
+            e.Property(x => x.Price30d).HasPrecision(18, 4);
+            e.Property(x => x.Price90d).HasPrecision(18, 4);
+            e.Property(x => x.Price180d).HasPrecision(18, 4);
+            e.Property(x => x.Price365d).HasPrecision(18, 4);
         });
     }
 }

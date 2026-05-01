@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddDbContextFactory<SignavexDbContext>(options =>
             options.UseSqlServer(connectionString));
 
+        services.AddSingleton<IPickOutcomeRecorder, PickOutcomeRecorder>();
         services.AddSingleton<IScanStateStore, SqliteScanStateStore>();
         services.AddSingleton<IScanHistoryStore, SqliteScanHistoryStore>();
         services.AddSingleton<IScanCommandStore, SqliteScanCommandStore>();

@@ -16,6 +16,7 @@ public class SqliteScanStateStore : IScanStateStore
     private readonly IDbContextFactory<SignavexDbContext> _dbFactory;
     private readonly ILogger<SqliteScanStateStore> _logger;
     private readonly double _surfacingThreshold;
+    private readonly IPickOutcomeRecorder _pickOutcomeRecorder;
 
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -27,11 +28,13 @@ public class SqliteScanStateStore : IScanStateStore
     public SqliteScanStateStore(
         IDbContextFactory<SignavexDbContext> dbFactory,
         ILogger<SqliteScanStateStore> logger,
-        IOptions<SignavexOptions> options)
+        IOptions<SignavexOptions> options,
+        IPickOutcomeRecorder pickOutcomeRecorder)
     {
         _dbFactory = dbFactory;
         _logger = logger;
         _surfacingThreshold = options.Value.SurfacingThreshold;
+        _pickOutcomeRecorder = pickOutcomeRecorder;
     }
 
     public Task SaveCheckpointAsync(ScanCheckpoint checkpoint, CancellationToken ct = default)
@@ -138,6 +141,19 @@ public class SqliteScanStateStore : IScanStateStore
         await db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Saved completed scan result: {Count} candidates", result.Candidates.Count);
+
+        // FT1: forward-test capture. Persisting the pick outcomes after the
+        // scan run is saved keeps the two writes loosely coupled — if the
+        // recorder ever throws, the scan run itself is still saved.
+        try
+        {
+            var scanDate = DateOnly.FromDateTime(result.CompletedAtUtc);
+            await _pickOutcomeRecorder.RecordScanAsync(scanDate, result.Candidates, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to record pick outcomes for scan {ScanId} — continuing", result.ScanId);
+        }
     }
 
     public async Task<CompletedScanResult?> LoadLatestResultAsync(CancellationToken ct = default)

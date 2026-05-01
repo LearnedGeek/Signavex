@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Signavex.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Signavex.Infrastructure.Persistence;
 namespace Signavex.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(SignavexDbContext))]
-    partial class SignavexDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260501104848_AddPickOutcomes")]
+    partial class AddPickOutcomes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

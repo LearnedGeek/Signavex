@@ -88,7 +88,7 @@ public class PortfolioJsonRoundTripTests
         Assert.Single(rt.EquityCurve);
         Assert.Equal(100_000m, rt.EquityCurve[0].TotalEquity);
         Assert.Equal(0.10, rt.Metrics.TotalReturnPct);
-        Assert.Equal(1, rt.MonthlyPnL.Count);
-        Assert.Equal(1, rt.PerTickerBreakdown.Count);
+        Assert.Single(rt.MonthlyPnL);
+        Assert.Single(rt.PerTickerBreakdown);
     }
 }

@@ -25,8 +25,12 @@ public class SqliteScanStateStoreTests : IAsyncDisposable
         using var db = _factory.CreateDbContext();
         db.Database.EnsureCreated();
 
+        // Use the real recorder rather than a mock so SaveCompletedResultAsync
+        // exercises the FT1 capture path end-to-end (verified in
+        // PickOutcomeRecorderTests).
+        var recorder = new PickOutcomeRecorder(_factory, NullLogger<PickOutcomeRecorder>.Instance);
         _store = new SqliteScanStateStore(_factory, NullLogger<SqliteScanStateStore>.Instance,
-            Options.Create(new SignavexOptions()));
+            Options.Create(new SignavexOptions()), recorder);
     }
 
     public async ValueTask DisposeAsync()
