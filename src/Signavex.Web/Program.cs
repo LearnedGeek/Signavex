@@ -452,6 +452,37 @@ app.MapPost("/admin/generate-brief", async (
     return Results.Redirect("/admin?action=generate-brief");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
+// FT3 backfill — admin proxy to /api/ops/backfill-pick-outcomes. Fire-and-
+// forget; the backfill walks every scan run and can take a while.
+app.MapPost("/admin/backfill-pick-outcomes", async (
+    IHttpClientFactory httpFactory,
+    ILogger<Program> logger) =>
+{
+    var client = httpFactory.CreateClient("functions");
+    _ = Task.Run(async () =>
+    {
+        try { await client.PostAsync("api/ops/backfill-pick-outcomes", content: null); }
+        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions backfill-pick-outcomes"); }
+    });
+    return Results.Redirect("/admin?action=backfill-pick-outcomes");
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+
+// FT2 manual trigger — admin proxy to /api/ops/evaluate-pick-outcomes.
+// Useful immediately after backfill or to grade newly-matured horizons
+// without waiting for the 12:30am UTC nightly timer.
+app.MapPost("/admin/evaluate-pick-outcomes", async (
+    IHttpClientFactory httpFactory,
+    ILogger<Program> logger) =>
+{
+    var client = httpFactory.CreateClient("functions");
+    _ = Task.Run(async () =>
+    {
+        try { await client.PostAsync("api/ops/evaluate-pick-outcomes", content: null); }
+        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions evaluate-pick-outcomes"); }
+    });
+    return Results.Redirect("/admin?action=evaluate-pick-outcomes");
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+
 app.MapPost("/admin/run-backtest", (BacktestRunnerService backtest, HttpContext ctx) =>
 {
     var asOfStr = ctx.Request.Form["asOfDate"].ToString();

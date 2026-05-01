@@ -87,6 +87,30 @@
                     </button>
                 </div>
             </form>
+
+            @* FT3 Backfill Pick Outcomes *@
+            <form method="post" action="/admin/backfill-pick-outcomes" data-enhance class="flex flex-col gap-2 rounded-[var(--radius-sm)] border border-outline-variant/50 p-3">
+                <AntiforgeryToken />
+                <div>
+                    <p class="text-sm font-medium text-on-surface">Backfill Pick Outcomes</p>
+                    <p class="text-xs text-on-surface-variant mt-0.5">Retroactively populates the predictions table from every scan run on file. Run this once after deploy. Idempotent.</p>
+                </div>
+                <button type="submit" class="self-start rounded-[var(--radius-sm)] bg-primary px-4 py-1.5 text-xs font-medium text-on-primary hover:brightness-110">
+                    Backfill Now
+                </button>
+            </form>
+
+            @* FT2 Evaluate Pick Outcomes *@
+            <form method="post" action="/admin/evaluate-pick-outcomes" data-enhance class="flex flex-col gap-2 rounded-[var(--radius-sm)] border border-outline-variant/50 p-3">
+                <AntiforgeryToken />
+                <div>
+                    <p class="text-sm font-medium text-on-surface">Evaluate Pick Outcomes</p>
+                    <p class="text-xs text-on-surface-variant mt-0.5">Resolves entry prices and grades matured horizons (30/90/180/365 days). Auto-runs at 12:30am UTC; trigger manually after a backfill.</p>
+                </div>
+                <button type="submit" class="self-start rounded-[var(--radius-sm)] bg-primary px-4 py-1.5 text-xs font-medium text-on-primary hover:brightness-110">
+                    Evaluate Now
+                </button>
+            </form>
         </div>
     </div>
 
@@ -148,6 +172,8 @@
         "sync-economic" => "Economic data sync requested. The Worker will start within a minute.",
         "generate-brief" => "Brief generation requested. The Worker will pick this up shortly.",
         "run-backtest" => "Backtest started. This takes several minutes — check back later for results.",
+        "backfill-pick-outcomes" => "Pick-outcome backfill started. Walks every scan run on file; check /predictions in a few minutes.",
+        "evaluate-pick-outcomes" => "Pick-outcome evaluator started. Resolves entries and grades matured horizons.",
         _ => null
     };
 
