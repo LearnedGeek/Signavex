@@ -92,6 +92,7 @@ builder.Services.ConfigureApplicationCookie(options =>
 builder.Services.AddSingleton<ScanDashboardService>();
 builder.Services.AddSingleton<BacktestRunnerService>();
 builder.Services.AddSingleton<QuantbackRunnerService>();
+builder.Services.AddSingleton<PredictionsDashboardService>();
 builder.Services.AddSingleton<ApiKeyValidationService>();
 builder.Services.AddSingleton<EconomicDashboardService>();
 builder.Services.AddSingleton<DailyBriefService>();

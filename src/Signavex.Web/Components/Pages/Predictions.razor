@@ -1,0 +1,167 @@
+@page "/predictions"
+@attribute [Authorize]
+@using Signavex.Web.Services
+@inject PredictionsDashboardService Dashboard
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>Predictions — Signavex</PageTitle>
+
+<div class="animate-fade-in">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-on-surface tracking-tight">Predictions</h1>
+            <p class="text-sm text-on-surface-variant mt-0.5">
+                Forward-test results — every pick the system has made, graded against SPY at 30/90/180/365-day horizons.
+            </p>
+        </div>
+    </div>
+
+    @if (!_isPro)
+    {
+        <UpgradePrompt Title="Unlock Predictions"
+                       Description="See whether Signavex's daily picks actually outperform the market over time." />
+    }
+    else if (_dashboard is null || _dashboard.TotalRows == 0)
+    {
+        <div class="flex flex-col items-center justify-center py-16 text-center">
+            <h3 class="text-base font-semibold text-on-surface">No prediction data yet</h3>
+            <p class="mt-1 text-sm text-on-surface-variant max-w-md">
+                Predictions accumulate as scans run. After 30 days you'll have first short-horizon results;
+                90+ days gives more meaningful signal. Admins can run the FT3 backfill to retroactively
+                populate from existing scan history.
+            </p>
+        </div>
+    }
+    else
+    {
+        var d = _dashboard;
+
+        @* Summary line *@
+        <div class="mb-4 text-xs text-on-surface-variant">
+            @d.TotalRows total picks captured, @d.EvaluatedRows have entry resolved.
+        </div>
+
+        @* Horizon stats grid — one card per horizon with hit rate + avg outperformance *@
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            @foreach (var h in d.HorizonStats)
+            {
+                <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest p-4">
+                    <div class="flex items-baseline justify-between">
+                        <p class="text-xs uppercase tracking-wider text-on-surface-variant font-medium">@h.Label horizon</p>
+                        <p class="text-xs text-on-surface-variant">@h.EvaluatedCount picks</p>
+                    </div>
+                    <p class="text-lg font-bold mt-1 @(h.AvgOutperformance >= 0 ? "text-success" : "text-error")">
+                        @FormatPct(h.AvgOutperformance)
+                    </p>
+                    <p class="text-[10px] text-on-surface-variant mt-1">avg vs SPY</p>
+                    <div class="mt-3 pt-3 border-t border-outline-variant/30 grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                            <p class="text-on-surface-variant">Hit rate</p>
+                            <p class="font-medium @(h.HitRate >= 0.5 ? "text-success" : "text-error")">@FormatPct(h.HitRate)</p>
+                        </div>
+                        <div>
+                            <p class="text-on-surface-variant">Pick / SPY</p>
+                            <p class="font-medium">@FormatPct(h.AvgTickerReturn) / @FormatPct(h.AvgSpyReturn)</p>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* Score-bucket table — answers "is the score predictive?" *@
+        <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden mb-6">
+            <div class="px-4 pt-4 pb-2 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">Score-bucket analysis</h3>
+                <span class="text-xs text-on-surface-variant">90-day horizon</span>
+            </div>
+            <p class="px-4 pb-3 text-xs text-on-surface-variant">
+                Do high-scoring picks actually outperform low-scoring picks at 90 days? If the score is predictive,
+                higher buckets should show better outperformance.
+            </p>
+            <table class="w-full text-xs">
+                <thead class="bg-surface-container text-on-surface-variant">
+                    <tr>
+                        <th class="text-left px-3 py-2 font-medium">Bucket</th>
+                        <th class="text-right px-3 py-2 font-medium">Picks evaluated</th>
+                        <th class="text-right px-3 py-2 font-medium">Avg outperformance</th>
+                        <th class="text-right px-3 py-2 font-medium">Hit rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var b in d.ScoreBuckets)
+                    {
+                        <tr class="border-t border-outline-variant/30">
+                            <td class="px-3 py-1.5 font-medium">@b.Label</td>
+                            <td class="text-right px-3 py-1.5">@b.Count</td>
+                            <td class="text-right px-3 py-1.5 @(b.AvgOutperformance90d >= 0 ? "text-success" : "text-error")">@FormatPct(b.AvgOutperformance90d)</td>
+                            <td class="text-right px-3 py-1.5 @(b.HitRate90d >= 0.5 ? "text-success" : "text-error")">@FormatPct(b.HitRate90d)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @* Per-pick table *@
+        <div class="rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest overflow-hidden">
+            <div class="px-4 pt-4 pb-2 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">Recent picks</h3>
+                <span class="text-xs text-on-surface-variant">Showing latest @d.RecentPicks.Count of @d.TotalRows</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead class="bg-surface-container text-on-surface-variant">
+                        <tr>
+                            <th class="text-left px-3 py-2 font-medium">Scan</th>
+                            <th class="text-left px-3 py-2 font-medium">Ticker</th>
+                            <th class="text-right px-3 py-2 font-medium">Score</th>
+                            <th class="text-right px-3 py-2 font-medium">30d vs SPY</th>
+                            <th class="text-right px-3 py-2 font-medium">90d vs SPY</th>
+                            <th class="text-right px-3 py-2 font-medium">180d vs SPY</th>
+                            <th class="text-right px-3 py-2 font-medium">365d vs SPY</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in d.RecentPicks)
+                        {
+                            <tr class="border-t border-outline-variant/30">
+                                <td class="px-3 py-1.5">@p.ScanDate.ToString("yyyy-MM-dd")</td>
+                                <td class="px-3 py-1.5 font-medium">@p.Ticker</td>
+                                <td class="text-right px-3 py-1.5">@p.FinalScore.ToString("F2")</td>
+                                <td class="text-right px-3 py-1.5 @ColorFor(p.Outperformance30d)">@FormatNullable(p.Outperformance30d)</td>
+                                <td class="text-right px-3 py-1.5 @ColorFor(p.Outperformance90d)">@FormatNullable(p.Outperformance90d)</td>
+                                <td class="text-right px-3 py-1.5 @ColorFor(p.Outperformance180d)">@FormatNullable(p.Outperformance180d)</td>
+                                <td class="text-right px-3 py-1.5 @ColorFor(p.Outperformance365d)">@FormatNullable(p.Outperformance365d)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <p class="text-xs text-on-surface-variant mt-4">
+            Outperformance is the pick's return minus SPY's return over the same window. Positive = beat the market.
+            Cells show "—" until that horizon has matured.
+        </p>
+    }
+</div>
+
+<Disclaimer />
+
+@code {
+    private bool _isPro;
+    private PredictionsDashboard? _dashboard;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isPro = authState.User.IsInRole("Pro") || authState.User.IsInRole("Admin");
+
+        if (_isPro)
+            _dashboard = await Dashboard.GetDashboardAsync();
+    }
+
+    private static string FormatPct(double v) => $"{v:+0.0%;-0.0%;0.0%}";
+    private static string FormatNullable(double? v) => v is null ? "—" : FormatPct(v.Value);
+    private static string ColorFor(double? v) =>
+        v is null ? "text-on-surface-variant" : v >= 0 ? "text-success" : "text-error";
+}
