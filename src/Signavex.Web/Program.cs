@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 using Signavex.Domain.Configuration;
 using Signavex.Engine;
 using Signavex.Infrastructure;
@@ -16,6 +17,26 @@ using Signavex.Web.Components;
 using Signavex.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Serilog — console + rotating file (Hetzner ops tail /var/log/signavex/web-*.log).
+// Replaces Azure App Insights, which only existed on the Functions side anyway.
+// Configuration sourced from appsettings (so prod can tune levels without
+// a redeploy); the file sink path defaults to /var/log/signavex/ on Linux,
+// falls back to ./logs/ on Windows for local dev.
+builder.Host.UseSerilog((ctx, services, config) =>
+{
+    var logRoot = OperatingSystem.IsWindows() ? "logs" : "/var/log/signavex";
+    config
+        .ReadFrom.Configuration(ctx.Configuration)
+        .ReadFrom.Services(services)
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.File(
+            path: $"{logRoot}/web-.log",
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 14,
+            outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
+});
 
 // Bind configuration options
 builder.Services.Configure<SignavexOptions>(
