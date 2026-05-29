@@ -6,6 +6,7 @@ using Serilog;
 using Signavex.Domain.Configuration;
 using Signavex.Engine;
 using Signavex.Infrastructure;
+using Signavex.Jobs;
 using Signavex.Jobs.Orchestrators;
 using Signavex.Signals;
 
@@ -56,17 +57,8 @@ var signavexOptions = builder.Configuration
 builder.Services
     .AddSignavexSignals()
     .AddSignavexEngine()
-    .AddSignavexInfrastructure(providerOptions, signavexOptions.ConnectionString);
-
-// Orchestrators — same set Functions used to expose via TimerTrigger/
-// HttpTrigger. Each is self-contained and invoked exactly once per process
-// invocation; cron handles the scheduling.
-builder.Services.AddSingleton<ScanOrchestrator>();
-builder.Services.AddSingleton<BriefOrchestrator>();
-builder.Services.AddSingleton<EconomicSyncOrchestrator>();
-builder.Services.AddSingleton<FundamentalsBackfillOrchestrator>();
-builder.Services.AddSingleton<PickOutcomeEvaluatorOrchestrator>();
-builder.Services.AddSingleton<PickOutcomeBackfillOrchestrator>();
+    .AddSignavexInfrastructure(providerOptions, signavexOptions.ConnectionString)
+    .AddSignavexJobs();
 
 using var host = builder.Build();
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
