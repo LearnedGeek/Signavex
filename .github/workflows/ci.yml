@@ -1,0 +1,34 @@
+name: CI
+
+# Build + test on every push and PR. Independent of the deploy workflow
+# so a failed deploy doesn't muddy PR-check history.
+on:
+  push:
+    branches:
+      - main
+      - hetzner-migration
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Signavex.sln
+
+      - name: Build
+        run: dotnet build Signavex.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test Signavex.sln --no-build --configuration Release --verbosity normal
