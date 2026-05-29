@@ -26,9 +26,10 @@ public static class ServiceCollectionExtensions
     {
         services.AddMemoryCache();
 
-        // Database persistence — SQL Server (LocalDB for dev, Azure SQL for production)
+        // Database persistence — PostgreSQL (post-Hetzner migration; was Azure SQL pre-2026-05).
+        // Connection string format: "Host=localhost;Database=signavex;Username=signavex;Password=..."
         services.AddDbContextFactory<SignavexDbContext>(options =>
-            options.UseSqlServer(connectionString));
+            options.UseNpgsql(connectionString));
 
         services.AddSingleton<IPickOutcomeRecorder, PickOutcomeRecorder>();
         services.AddSingleton<IScanStateStore, SqliteScanStateStore>();
