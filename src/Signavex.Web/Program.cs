@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -67,6 +68,20 @@ builder.Services
     .AddSignavexSignals()
     .AddSignavexEngine()
     .AddSignavexInfrastructure(providerOptions, signavexOptions.ConnectionString);
+
+// Data Protection — persist keys to a known out-of-deploy-tree path so
+// the atomic /var/www/signavex.new → /var/www/signavex swap doesn't
+// invalidate cookies or anti-forgery tokens on every deploy. On Linux
+// (Hetzner prod) we use /var/lib/signavex/dp-keys; on Windows (local
+// dev) we fall back to a local ./dp-keys folder. SetApplicationName
+// keeps key rings isolated from any other ASP.NET app sharing the box.
+var dpKeysPath = OperatingSystem.IsWindows()
+    ? Path.Combine(builder.Environment.ContentRootPath, "dp-keys")
+    : "/var/lib/signavex/dp-keys";
+Directory.CreateDirectory(dpKeysPath);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dpKeysPath))
+    .SetApplicationName("signavex");
 
 // ASP.NET Identity
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
