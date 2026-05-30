@@ -1,5 +1,7 @@
 # Hetzner Migration Plan — Addendum / Review Notes
 
+> **STATUS: SHIPPED 2026-05-30 alongside the main plan.** Production live at https://signavex.learnedgeek.com. Of the addendum's suggestions, the ones that landed: grey-cloud Cloudflare, DataProtection keys persisted via Ansible, Postgres `Maximum Pool Size=20`, systemd timers (not cron), Ansible `aspnet_site` role extended in P3.B, fire-and-forget try/catch around job dispatch. See [project_hetzner_cutover_shipped](../../../../Users/mcart/.claude/projects/e--dev-work-Signavex/memory/project_hetzner_cutover_shipped.md) for the as-shipped state.
+
 Author: another Claude session (via Mark, 2026-05-29)
 Purpose: review feedback on the [Signavex Hetzner Migration Plan](./HETZNER-MIGRATION-PLAN.md), written from the perspective of the Claude session that just built out the `learnedgeek-host` Ansible playbook that this migration will plug into. This document is meant to be read alongside the main plan and is non-authoritative — when in conflict, the main plan (curated by Mark) wins.
 

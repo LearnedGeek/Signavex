@@ -1,5 +1,7 @@
 # Signavex → Hetzner Migration Plan
 
+> **STATUS: SHIPPED 2026-05-30.** Production live at https://signavex.learnedgeek.com. Azure resources stopped, 7-day soak in progress, `terraform destroy` planned ~2026-06-06. See [project_hetzner_cutover_shipped](../../../../Users/mcart/.claude/projects/e--dev-work-Signavex/memory/project_hetzner_cutover_shipped.md) in memory for the as-shipped summary and the cutover-day gotchas. The phases and checklists below are kept as a historical record of the plan — checkboxes were not flipped during execution; treat the existence of a green production at signavex.learnedgeek.com as the source of truth.
+
 Moving Signavex off Azure (App Service + Functions + SQL Basic + App Insights + Storage) and onto the existing `learnedgeek-host` Hetzner box. Same physical machine that already serves the static LearnedGeek site, plus Postgres, plus Caddy fronted by Cloudflare.
 
 **Why:** ~$6–10/mo on Azure → ~$0 incremental on the box that's already running. Plus no more F1 cold-start UX, no SCM auth weirdness, no Functions Consumption-plan 10-minute execution limits.
