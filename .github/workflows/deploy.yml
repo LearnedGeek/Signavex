@@ -19,17 +19,17 @@
 #                       LearnedGeek's deploy.yml).
 #
 #   DB_PASSWORD              Postgres password for the signavex role.
-#   POLYGON_API_KEY          Polygon.io API key (formerly via Azure config).
+#   POLYGON_API_KEY          Polygon.io / massive.com API key.
 #   ALPHA_VANTAGE_API_KEY    Alpha Vantage API key.
 #   FRED_API_KEY             FRED API key.
 #   ANTHROPIC_API_KEY        Anthropic API key for daily briefs.
-#   SENDGRID_API_KEY         SendGrid API key for transactional email.
 #   GOOGLE_CLIENT_ID         Google OAuth client ID.
 #   GOOGLE_CLIENT_SECRET     Google OAuth client secret.
-#   STRIPE_SECRET_KEY        Stripe API secret.
-#   STRIPE_PUBLISHABLE_KEY   Stripe publishable key (used client-side).
-#   STRIPE_WEBHOOK_SECRET    Stripe webhook signing secret.
-#   STRIPE_PRO_PRICE_ID      Stripe price ID for the Pro plan.
+#
+# Email (SendGrid) and Stripe are NOT used by Signavex — those config
+# sections in appsettings.json default to empty and the corresponding
+# code paths are inert. Add the secrets + template fields back if/when
+# transactional email or paid plans get turned on.
 
 name: Deploy to Hetzner
 
@@ -83,15 +83,10 @@ jobs:
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-          STRIPE_PRO_PRICE_ID: ${{ secrets.STRIPE_PRO_PRICE_ID }}
         run: |
-          VARS='${DB_PASSWORD} ${POLYGON_API_KEY} ${ALPHA_VANTAGE_API_KEY} ${FRED_API_KEY} ${ANTHROPIC_API_KEY} ${SENDGRID_API_KEY} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET} ${STRIPE_SECRET_KEY} ${STRIPE_PUBLISHABLE_KEY} ${STRIPE_WEBHOOK_SECRET} ${STRIPE_PRO_PRICE_ID}'
+          VARS='${DB_PASSWORD} ${POLYGON_API_KEY} ${ALPHA_VANTAGE_API_KEY} ${FRED_API_KEY} ${ANTHROPIC_API_KEY} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET}'
           envsubst "$VARS" \
             < src/Signavex.Web/appsettings.Production.json.template \
             > publish/appsettings.Production.json

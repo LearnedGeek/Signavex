@@ -17,18 +17,6 @@
     "SurfacingThreshold": 0.45,
     "Universe": [ "SP500", "SP400" ]
   },
-  "Email": {
-    "Provider": "SendGrid",
-    "ApiKey": "${SENDGRID_API_KEY}",
-    "FromAddress": "noreply@signavex.com",
-    "FromName": "Signavex"
-  },
-  "Stripe": {
-    "SecretKey": "${STRIPE_SECRET_KEY}",
-    "PublishableKey": "${STRIPE_PUBLISHABLE_KEY}",
-    "WebhookSecret": "${STRIPE_WEBHOOK_SECRET}",
-    "ProPriceId": "${STRIPE_PRO_PRICE_ID}"
-  },
   "Google": {
     "ClientId": "${GOOGLE_CLIENT_ID}",
     "ClientSecret": "${GOOGLE_CLIENT_SECRET}"
