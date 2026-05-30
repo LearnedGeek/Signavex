@@ -5,7 +5,7 @@ using Signavex.Domain.Models;
 using Signavex.Engine;
 using Signavex.Infrastructure.Persistence;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// Runs a stock scan end-to-end: loads/creates checkpoint, iterates universe

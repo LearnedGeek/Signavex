@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Signavex.Domain.Interfaces;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// Pulls the latest observations for all enabled FRED economic series.

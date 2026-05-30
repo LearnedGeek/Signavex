@@ -6,7 +6,7 @@ using Signavex.Domain.Interfaces;
 using Signavex.Domain.Models;
 using Signavex.Infrastructure.Persistence;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// FT3: one-shot retroactive populate of <c>PickOutcomes</c> from existing

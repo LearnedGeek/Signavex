@@ -1,10 +1,14 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 using Signavex.Domain.Configuration;
 using Signavex.Engine;
 using Signavex.Infrastructure;
+using Signavex.Jobs;
+using Signavex.Jobs.Orchestrators;
 using Signavex.Infrastructure.Email;
 using Signavex.Infrastructure.Persistence;
 using Signavex.Signals;
@@ -14,6 +18,26 @@ using Signavex.Web.Components;
 using Signavex.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Serilog — console + rotating file (Hetzner ops tail /var/log/signavex/web-*.log).
+// Replaces Azure App Insights, which only existed on the Functions side anyway.
+// Configuration sourced from appsettings (so prod can tune levels without
+// a redeploy); the file sink path defaults to /var/log/signavex/ on Linux,
+// falls back to ./logs/ on Windows for local dev.
+builder.Host.UseSerilog((ctx, services, config) =>
+{
+    var logRoot = OperatingSystem.IsWindows() ? "logs" : "/var/log/signavex";
+    config
+        .ReadFrom.Configuration(ctx.Configuration)
+        .ReadFrom.Services(services)
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.File(
+            path: $"{logRoot}/web-.log",
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 14,
+            outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
+});
 
 // Bind configuration options
 builder.Services.Configure<SignavexOptions>(
@@ -44,6 +68,20 @@ builder.Services
     .AddSignavexSignals()
     .AddSignavexEngine()
     .AddSignavexInfrastructure(providerOptions, signavexOptions.ConnectionString);
+
+// Data Protection — persist keys to a known out-of-deploy-tree path so
+// the atomic /var/www/signavex.new → /var/www/signavex swap doesn't
+// invalidate cookies or anti-forgery tokens on every deploy. On Linux
+// (Hetzner prod) we use /var/lib/signavex/dp-keys; on Windows (local
+// dev) we fall back to a local ./dp-keys folder. SetApplicationName
+// keeps key rings isolated from any other ASP.NET app sharing the box.
+var dpKeysPath = OperatingSystem.IsWindows()
+    ? Path.Combine(builder.Environment.ContentRootPath, "dp-keys")
+    : "/var/lib/signavex/dp-keys";
+Directory.CreateDirectory(dpKeysPath);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dpKeysPath))
+    .SetApplicationName("signavex");
 
 // ASP.NET Identity
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
@@ -97,24 +135,11 @@ builder.Services.AddSingleton<ApiKeyValidationService>();
 builder.Services.AddSingleton<EconomicDashboardService>();
 builder.Services.AddSingleton<DailyBriefService>();
 
-// HttpClient for calling Azure Functions admin endpoints. Named client
-// "functions" carries the base URL + admin key header on every request.
-// Base URL + key are supplied by Terraform via Functions__Url + Functions__AdminKey.
-builder.Services.AddHttpClient("functions", (sp, client) =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    var baseUrl = config["Functions:Url"];
-    if (!string.IsNullOrEmpty(baseUrl))
-    {
-        client.BaseAddress = new Uri(baseUrl);
-    }
-    var adminKey = config["Functions:AdminKey"];
-    if (!string.IsNullOrEmpty(adminKey))
-    {
-        client.DefaultRequestHeaders.Add("x-signavex-admin-key", adminKey);
-    }
-    client.Timeout = TimeSpan.FromSeconds(60);
-});
+// Background-job orchestrators — formerly invoked via HttpClient against
+// the separate Functions app; now live in-process. cron drives the
+// scheduled runs through Signavex.Jobs.dll; admin endpoints below kick
+// the same orchestrators off on demand.
+builder.Services.AddSignavexJobs();
 
 // Authorization policies
 builder.Services.AddAuthorizationBuilder()
@@ -413,72 +438,69 @@ app.MapPost("/account/billing-portal", async (
 // "functions" HttpClient already carries the base URL + admin key header.
 // Fire-and-forget: we return the redirect immediately and let the Function
 // run in the background — the admin page shows a "started" banner.
-app.MapPost("/admin/scan", async (
-    IHttpClientFactory httpFactory,
+// Admin "kick a job now" endpoints — fire the orchestrator on a
+// background Task and redirect immediately. The job is the same code
+// path cron runs at its scheduled time; this just doesn't wait for the
+// schedule. The orchestrator creates its own DI scope internally, so
+// it's safe to run beyond the lifetime of the HTTP request.
+app.MapPost("/admin/scan", (
+    ScanOrchestrator scan,
     ILogger<Program> logger) =>
 {
-    var client = httpFactory.CreateClient("functions");
     _ = Task.Run(async () =>
     {
-        try { await client.PostAsync("api/ops/scan", content: null); }
-        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions scan"); }
+        try { await scan.RunScanAsync(CancellationToken.None); }
+        catch (Exception ex) { logger.LogError(ex, "Admin-triggered scan failed"); }
     });
     return Results.Redirect("/admin?action=scan");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
-app.MapPost("/admin/sync-economic", async (
-    IHttpClientFactory httpFactory,
+app.MapPost("/admin/sync-economic", (
+    EconomicSyncOrchestrator sync,
     ILogger<Program> logger) =>
 {
-    var client = httpFactory.CreateClient("functions");
     _ = Task.Run(async () =>
     {
-        try { await client.PostAsync("api/ops/sync-economic", content: null); }
-        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions sync-economic"); }
+        try { await sync.SyncAllSeriesAsync(CancellationToken.None); }
+        catch (Exception ex) { logger.LogError(ex, "Admin-triggered economic sync failed"); }
     });
     return Results.Redirect("/admin?action=sync-economic");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
-app.MapPost("/admin/generate-brief", async (
-    IHttpClientFactory httpFactory,
+app.MapPost("/admin/generate-brief", (
+    BriefOrchestrator brief,
     ILogger<Program> logger) =>
 {
-    var client = httpFactory.CreateClient("functions");
     _ = Task.Run(async () =>
     {
-        try { await client.PostAsync("api/ops/generate-brief", content: null); }
-        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions generate-brief"); }
+        try { await brief.GenerateBriefAsync(CancellationToken.None); }
+        catch (Exception ex) { logger.LogError(ex, "Admin-triggered brief generation failed"); }
     });
     return Results.Redirect("/admin?action=generate-brief");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
-// FT3 backfill — admin proxy to /api/ops/backfill-pick-outcomes. Fire-and-
-// forget; the backfill walks every scan run and can take a while.
-app.MapPost("/admin/backfill-pick-outcomes", async (
-    IHttpClientFactory httpFactory,
+// FT3 backfill — fire-and-forget; walks every scan run, takes a while.
+app.MapPost("/admin/backfill-pick-outcomes", (
+    PickOutcomeBackfillOrchestrator backfill,
     ILogger<Program> logger) =>
 {
-    var client = httpFactory.CreateClient("functions");
     _ = Task.Run(async () =>
     {
-        try { await client.PostAsync("api/ops/backfill-pick-outcomes", content: null); }
-        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions backfill-pick-outcomes"); }
+        try { await backfill.RunAsync(CancellationToken.None); }
+        catch (Exception ex) { logger.LogError(ex, "Admin-triggered pick-outcome backfill failed"); }
     });
     return Results.Redirect("/admin?action=backfill-pick-outcomes");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
-// FT2 manual trigger — admin proxy to /api/ops/evaluate-pick-outcomes.
-// Useful immediately after backfill or to grade newly-matured horizons
-// without waiting for the 12:30am UTC nightly timer.
-app.MapPost("/admin/evaluate-pick-outcomes", async (
-    IHttpClientFactory httpFactory,
+// FT2 manual trigger — same as the 12:30am UTC cron, just on demand.
+app.MapPost("/admin/evaluate-pick-outcomes", (
+    PickOutcomeEvaluatorOrchestrator evaluator,
     ILogger<Program> logger) =>
 {
-    var client = httpFactory.CreateClient("functions");
     _ = Task.Run(async () =>
     {
-        try { await client.PostAsync("api/ops/evaluate-pick-outcomes", content: null); }
-        catch (Exception ex) { logger.LogError(ex, "Failed to invoke Functions evaluate-pick-outcomes"); }
+        try { await evaluator.RunCycleAsync(CancellationToken.None); }
+        catch (Exception ex) { logger.LogError(ex, "Admin-triggered pick-outcome evaluation failed"); }
     });
     return Results.Redirect("/admin?action=evaluate-pick-outcomes");
 }).RequireAuthorization(policy => policy.RequireRole("Admin"));

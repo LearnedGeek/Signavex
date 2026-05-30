@@ -1,82 +1,144 @@
-name: CI / Deploy
+# Deploy Signavex to the Hetzner VPS (learnedgeek-host).
+#
+# Triggers:
+#   - Manual via the Actions tab → "Deploy to Hetzner" → "Run workflow"
+#
+# Push-to-main is intentionally NOT enabled yet. It will be added at
+# cutover (P4) once Cloudflare DNS points signavex.learnedgeek.com at
+# the Hetzner VPS. Until then, automated deploys would only ever fail
+# the smoke test, and we don't want PR merges firing deploys at
+# infrastructure that isn't ready.
+#
+# Required GitHub repo secrets:
+#   DEPLOY_SSH_KEY     Private key matching an authorized_keys entry on
+#                       the VPS. Generate fresh, never reuse the
+#                       LearnedGeek key (per-site isolation).
+#   DEPLOY_HOST        VPS hostname or IP.
+#   DEPLOY_USER        SSH user; `root` for now, switch to a dedicated
+#                       `deploy` user later (same hardening note as
+#                       LearnedGeek's deploy.yml).
+#
+#   DB_PASSWORD              Postgres password for the signavex role.
+#   POLYGON_API_KEY          Polygon.io / massive.com API key.
+#   ALPHA_VANTAGE_API_KEY    Alpha Vantage API key.
+#   FRED_API_KEY             FRED API key.
+#   ANTHROPIC_API_KEY        Anthropic API key for daily briefs.
+#   GOOGLE_CLIENT_ID         Google OAuth client ID.
+#   GOOGLE_CLIENT_SECRET     Google OAuth client secret.
+#
+# Email (SendGrid) and Stripe are NOT used by Signavex — those config
+# sections in appsettings.json default to empty and the corresponding
+# code paths are inert. Add the secrets + template fields back if/when
+# transactional email or paid plans get turned on.
+
+name: Deploy to Hetzner
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:        # The "Run workflow" button in the Actions tab
+  workflow_dispatch:
 
-env:
-  DOTNET_VERSION: '8.0.x'
-
-# Required for OIDC: GitHub only mints the federated token if the
-# workflow explicitly requests permission. Without id-token: write,
-# the azure/login step fails with an opaque error.
-permissions:
-  id-token: write
-  contents: read
+concurrency:
+  group: deploy-hetzner-signavex
+  cancel-in-progress: false
 
 jobs:
-  ci:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build
-        run: dotnet build --no-restore --configuration Release
-
-      - name: Test
-        run: dotnet test --no-build --configuration Release
-
   deploy:
-    name: Deploy Web to Azure
     runs-on: ubuntu-latest
-    needs: ci                                     # Won't start unless CI passed
-    if: github.event_name == 'workflow_dispatch'  # Manual trigger only
-    environment: production                       # Lets us require approval later
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-version: '10.0.x'
 
-      # Tailwind CSS — the project's MSBuild target only runs on Windows
-      # (it looks for .tailwind\tailwindcss.exe). On the Ubuntu runner we
-      # download the Linux standalone binary and produce app.built.css
-      # ourselves before dotnet publish picks up wwwroot.
-      - name: Build Tailwind CSS
+      - name: Restore + build + test
         run: |
-          curl -sSL -o tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v4.2.1/tailwindcss-linux-x64
-          chmod +x tailwindcss
-          ./tailwindcss \
-            -i src/Signavex.Web/Styles/app.css \
-            -o src/Signavex.Web/wwwroot/css/app.built.css \
-            --minify
+          dotnet restore Signavex.sln
+          dotnet build Signavex.sln --no-restore --configuration Release
+          dotnet test Signavex.sln --no-build --configuration Release
 
-      - name: Publish Signavex.Web
-        run: dotnet publish src/Signavex.Web -c Release -o ./publish
+      - name: Publish (linux-x64, framework-dependent)
+        # Web's project references include Signavex.Jobs, so the Jobs DLL
+        # lands in the same publish output alongside Signavex.Web.dll.
+        # cron-driven systemd timer units invoke
+        #   /usr/bin/dotnet /var/www/signavex/Signavex.Jobs.dll <job>
+        # from the same deploy directory.
+        run: |
+          dotnet publish src/Signavex.Web/Signavex.Web.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained false \
+            --output ./publish
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Render appsettings.Production.json from template + secrets
+        # envsubst substitutes ${VAR} placeholders only for variables in
+        # the explicit list — any other ${...} pattern is left literal,
+        # defending against future copy-paste mistakes that would expose
+        # unrelated env vars in the rendered config.
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          VARS='${DB_PASSWORD} ${POLYGON_API_KEY} ${ALPHA_VANTAGE_API_KEY} ${FRED_API_KEY} ${ANTHROPIC_API_KEY} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET}'
+          envsubst "$VARS" \
+            < src/Signavex.Web/appsettings.Production.json.template \
+            > publish/appsettings.Production.json
+          python3 -m json.tool publish/appsettings.Production.json > /dev/null
 
-      - name: Deploy to App Service
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: signavex-web
-          package: ./publish
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy via tar-over-SSH (atomic swap)
+        # Stream tar over SSH to a staging directory; only after the
+        # extraction succeeds do we stop the service and swap directories.
+        # Mid-transfer failure leaves the active site untouched. Previous
+        # version is kept at /var/www/signavex.prev for one-command
+        # rollback.
+        run: |
+          cd publish
+          tar -cf - . | ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            'set -e
+             STAGING=/var/www/signavex.new
+             ACTIVE=/var/www/signavex
+             PREV=/var/www/signavex.prev
+             rm -rf "$STAGING"
+             mkdir -p "$STAGING"
+             cd "$STAGING"
+             tar -xf -
+             chown -R www-data:www-data "$STAGING"
+             systemctl stop signavex
+             if [ -d "$ACTIVE" ]; then
+               rm -rf "$PREV"
+               mv "$ACTIVE" "$PREV"
+             fi
+             mv "$STAGING" "$ACTIVE"
+             systemctl start signavex'
+
+      - name: Smoke test the deploy
+        # Poll signavex.learnedgeek.com for up to 30 seconds. The site
+        # may not respond instantly after restart, especially on the
+        # first migrate-on-startup cold boot.
+        run: |
+          for i in $(seq 1 15); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://signavex.learnedgeek.com || echo "000")
+            if [[ "$STATUS" -ge 200 && "$STATUS" -lt 400 ]]; then
+              echo "signavex.learnedgeek.com responded with HTTP $STATUS after attempt ${i}"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 2s"
+            sleep 2
+          done
+          echo "Health check failed: no 2xx/3xx response in 30 seconds"
+          exit 1

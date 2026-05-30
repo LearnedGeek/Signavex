@@ -5,7 +5,7 @@ using Signavex.Domain.Interfaces;
 using Signavex.Engine;
 using Signavex.Infrastructure.Persistence;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// Drip-feeds Alpha Vantage fundamentals for tickers missing from the cache.

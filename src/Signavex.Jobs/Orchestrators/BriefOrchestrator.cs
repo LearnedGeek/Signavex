@@ -5,7 +5,7 @@ using Signavex.Domain.Configuration;
 using Signavex.Domain.Interfaces;
 using Signavex.Domain.Models;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// Generates the daily AI brief end-to-end: builds context from scan + economy

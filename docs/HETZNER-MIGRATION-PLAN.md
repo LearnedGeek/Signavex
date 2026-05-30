@@ -4,6 +4,8 @@ Moving Signavex off Azure (App Service + Functions + SQL Basic + App Insights + 
 
 **Why:** ~$6–10/mo on Azure → ~$0 incremental on the box that's already running. Plus no more F1 cold-start UX, no SCM auth weirdness, no Functions Consumption-plan 10-minute execution limits.
 
+> **Companion doc:** [HETZNER-MIGRATION-PLAN-ADDENDUM.md](./HETZNER-MIGRATION-PLAN-ADDENDUM.md) — review notes from a separate Claude session that knows the `learnedgeek-host` Ansible layout. Edits driven by that review (grey-cloud, DataProtection keys, MaxPoolSize, systemd timers over cron, Ansible role extension as P3.B.0, fire-and-forget try/catch) are folded into this plan.
+
 ## Decisions confirmed (2026-05-29)
 1. **Data migration:** preserve everything. Fall back to hybrid only if the migration tool turns out to be more than ~300 LOC of throwaway code.
 2. **Scheduling:** system `cron` invoking a console app (`Signavex.Jobs`). No in-process scheduler.
@@ -63,7 +65,7 @@ One ASP.NET Core 10 process serving HTTP. Six cron entries invoking the same bin
 ### P1.B: SQL Server → PostgreSQL provider swap
 - [ ] **P1.B.1** Add `Npgsql.EntityFrameworkCore.PostgreSQL 10.x` to `Signavex.Infrastructure.csproj`. Remove `Microsoft.EntityFrameworkCore.SqlServer`.
 - [ ] **P1.B.2** In `ServiceCollectionExtensions.AddSignavexInfrastructure`: change `options.UseSqlServer(connectionString)` → `options.UseNpgsql(connectionString)`.
-- [ ] **P1.B.3** Connection string format: `Host=localhost;Database=signavex;Username=signavex;Password=...`. Rendered from template via GH Actions just like LearnedGeek's pattern.
+- [ ] **P1.B.3** Connection string format: `Host=localhost;Database=signavex;Username=signavex;Password=...;Maximum Pool Size=20`. The `Maximum Pool Size=20` cap is polite to a shared Postgres — Npgsql's default is 100 and Postgres `max_connections` is also 100, but the box already hosts allevo + LCS + LCS-staging. 20 per site × 4 sites + headroom for `pg_dump` cron + manual `psql` keeps us comfortably under the ceiling. Rendered from template via GH Actions just like LearnedGeek's pattern.
 - [ ] **P1.B.4** Delete the entire `src/Signavex.Infrastructure/Persistence/Migrations/` folder. SQL Server migrations are not Postgres-compatible.
 - [ ] **P1.B.5** Generate fresh initial migration: `dotnet ef migrations add InitialPostgres --project src/Signavex.Infrastructure --startup-project src/Signavex.Web`. One file replaces ~10 prior migrations.
 - [ ] **P1.B.6** Sanity check the migration: enum/decimal/DateOnly/DateTime columns should map cleanly. EF Core 10's Npgsql provider handles `DateOnly` natively as `date` and `DateTime UTC` as `timestamp with time zone`.
@@ -87,7 +89,15 @@ One ASP.NET Core 10 process serving HTTP. Six cron entries invoking the same bin
 **Exit:** `dotnet run --project src/Signavex.Jobs -- scan` runs a full scan locally against Postgres in Docker.
 
 ### P1.D: Re-absorb admin HTTP endpoints into Web; delete Functions
-- [ ] **P1.D.1** Currently the Web app's `/admin/scan`, `/admin/sync-economic`, etc. proxy via `HttpClient("functions")` to the Functions app. Delete that handler and replace each with a direct call: `_ = Task.Run(() => orchestrator.RunScanAsync(default))`. The proxy was only there because Functions was a separate process.
+- [ ] **P1.D.1** Currently the Web app's `/admin/scan`, `/admin/sync-economic`, etc. proxy via `HttpClient("functions")` to the Functions app. Delete that handler and replace each with a direct call wrapped in try/catch so exceptions are logged, not swallowed:
+  ```csharp
+  _ = Task.Run(async () =>
+  {
+      try { await scan.RunScanAsync(CancellationToken.None); }
+      catch (Exception ex) { logger.LogError(ex, "Admin-triggered scan failed"); }
+  });
+  ```
+  **On the CLAUDE.md fire-and-forget rule:** the global rule is about *bare* `_ = SomeAsync()` swallowing exceptions silently. The try/catch + LogError wrapper here is exactly the mitigation. If we want to upgrade later, `IBackgroundTaskQueue + BackgroundService` is the canonical alternative (~30 LOC) — but it's a polish-pass concern, not blocking for the migration.
 - [ ] **P1.D.2** Delete `Functions__Url` and `Functions__AdminKey` config keys, AdminKeyAuthorizer, the HttpClient("functions") registration.
 - [ ] **P1.D.3** Delete `src/Signavex.Functions/` and all migration/build references. Remove from `Signavex.sln`.
 - [ ] **P1.D.4** Delete `.github/workflows/deploy-functions.yml`.
@@ -95,12 +105,23 @@ One ASP.NET Core 10 process serving HTTP. Six cron entries invoking the same bin
 
 **Exit:** Functions code gone. Single `Signavex.Web` HTTP process, single `Signavex.Jobs` cron-driven console app. All tests pass.
 
-### P1.E: Application Insights → Serilog file
+### P1.E: Application Insights → Serilog file + explicit DataProtection
 - [ ] **P1.E.1** Add `Serilog.AspNetCore`, `Serilog.Sinks.File` to Web; `Serilog.Extensions.Hosting`, `Serilog.Sinks.File` to Jobs.
 - [ ] **P1.E.2** Configure `RollingFile` sink writing to `/var/log/signavex/web-.log` (Web) and `/var/log/signavex/jobs-<job>-.log` (Jobs). Daily rotation, 14-day retention.
 - [ ] **P1.E.3** Remove `Microsoft.ApplicationInsights.AspNetCore` if referenced anywhere.
+- [ ] **P1.E.4** Configure ASP.NET Core DataProtection with an explicit persisted key path so atomic deploy swaps don't invalidate cookies / anti-forgery tokens. Default Linux path is `~/.aspnet/DataProtection-Keys` — under `www-data` that resolves to `/var/www/.aspnet/...`, which is *under* the deploy tree's parent. Better to be explicit:
+  ```csharp
+  var dpKeysPath = OperatingSystem.IsWindows()
+      ? Path.Combine(builder.Environment.ContentRootPath, "dp-keys")
+      : "/var/lib/signavex/dp-keys";
+  Directory.CreateDirectory(dpKeysPath);
+  builder.Services.AddDataProtection()
+      .PersistKeysToFileSystem(new DirectoryInfo(dpKeysPath))
+      .SetApplicationName("signavex");
+  ```
+  `SetApplicationName` keeps key rings isolated from any other ASP.NET app on the box. Ansible needs to ensure `/var/lib/signavex/dp-keys` exists with `www-data:www-data` ownership, mode `0700`.
 
-**Exit:** Logs visible via `tail -f /var/log/signavex/*.log` over SSH.
+**Exit:** Logs visible via `tail -f /var/log/signavex/*.log` over SSH. DP keys persist across deploys so users stay signed in.
 
 ---
 
@@ -148,17 +169,66 @@ Mirror `learnedgeek/.github/workflows/deploy.yml`. Differences vs LearnedGeek:
 - [ ] **P3.A.4** Delete the existing `.github/workflows/deploy.yml` and `deploy-functions.yml` that target Azure. Optionally keep them on a `legacy-azure` branch for ~1 month, in case we need to redeploy Azure for rollback.
 
 ### P3.B: Ansible role
-- [ ] **P3.B.1** In `learnedgeek-infra`: new `host_vars/learnedgeek-host.yml` entry under whatever the existing `aspnet_site` role takes — site name `signavex`, port (e.g., 5001 since LearnedGeek is on 5000), domain, etc.
-- [ ] **P3.B.2** Vault entries for the secrets that need to be on the box at install time (DB password — most others are injected via the rendered appsettings file, so they don't need Ansible vault). Per the existing learnedgeek pattern.
-- [ ] **P3.B.3** Postgres role: create database `signavex` and user `signavex` with appropriate grants. If the existing role doesn't have a "create database" task, add one. Otherwise do it manually once on the box.
-- [ ] **P3.B.4** systemd unit for `signavex.service` (mirrors `learnedgeek.service`, just different ExecStart and WorkingDirectory).
-- [ ] **P3.B.5** Caddy block for `signavex.<domain>` (decide domain in P3.D). Reverse proxy to localhost:5001. Cloudflare in front as usual.
-- [ ] **P3.B.6** Crontab entries for the 6 jobs, owner `www-data` (matching the systemd unit), env-vars include `DOTNET_ENVIRONMENT=Production`. Use `flock` so a long-running scan doesn't get re-invoked while still in flight:
+The `aspnet_site` role in `learnedgeek-infra/learnedgeek-host/ansible/` already renders systemd units + Caddy blocks from a per-site dict in `host_vars/learnedgeek-host.yml`. Signavex is the first site that needs three things the role doesn't yet template:
+
+- Scheduled jobs (systemd timers)
+- DataProtection key directory (created out-of-deploy-tree with strict ownership)
+- A console-app companion (`Signavex.Jobs.dll`) co-located with the web app
+
+Extending the role once benefits every future site, so P3.B.0 is a prereq PR to `learnedgeek-infra`.
+
+- [ ] **P3.B.0** **PR to `learnedgeek-infra`:** extend `aspnet_site` role to accept three new keys per site (`scheduled_jobs`, `data_protection_keys`, `companion_dlls`). Template `/etc/systemd/system/<site>-<job>.{service,timer}` pairs for scheduled jobs, ensure DP key directory exists with `www-data:www-data 0700`, and copy companion DLLs alongside the main publish output. Est. 30–60 min if it's the first time touching the role.
+- [ ] **P3.B.1** New `host_vars/learnedgeek-host.yml` entry. Shape:
+  ```yaml
+  - name: signavex
+    description: "Signavex stock screener"
+    port: 5001
+    dll: Signavex.Web.dll
+    companion_dlls: ["Signavex.Jobs.dll"]
+    caddy_hosts: ["signavex.learnedgeek.com"]
+    needs_postgres: true
+    db_name: signavex
+    db_role: signavex
+    db_password: "{{ vault_signavex_db_password }}"
+    data_protection_keys: /var/lib/signavex/dp-keys
+    scheduled_jobs:
+      - name: scan
+        on_calendar: "Mon..Fri 22:00 UTC"
+        job_arg: scan
+        persistent: true
+      - name: scan-resume
+        on_calendar: "*-*-* 22:30,23:00,23:30,00:00,00:30,01:00,01:30,02:00,02:30,03:00,03:30,04:00,04:30,05:00,05:30 UTC"
+        job_arg: scan-resume
+      - name: brief
+        on_calendar: "Mon..Fri 23:30 UTC"
+        job_arg: brief
+        persistent: true
+      - name: sync-economic
+        on_calendar: "Mon..Fri 21:30 UTC"
+        job_arg: sync-economic
+        persistent: true
+      - name: fundamentals-backfill
+        on_calendar: "*-*-* 01:00 UTC"
+        job_arg: fundamentals-backfill
+        persistent: true
+      - name: evaluate-pick-outcomes
+        on_calendar: "*-*-* 00:30 UTC"
+        job_arg: evaluate-pick-outcomes
+        persistent: true
   ```
-  0 22 * * 1-5  www-data  /usr/bin/flock -n /tmp/signavex-scan.lock /usr/bin/dotnet /var/www/signavex/Signavex.Jobs.dll scan >> /var/log/signavex/scan.log 2>&1
-  ```
-  Plus 5 more for brief, sync-economic, fundamentals-backfill, evaluate-pick-outcomes, scan-resume.
-- [ ] **P3.B.7** Log rotation: `/etc/logrotate.d/signavex` rotates `/var/log/signavex/*.log` daily, keeps 14 days, compresses old ones.
+  `persistent: true` (→ `Persistent=true` in the timer unit) catches up missed runs after a reboot. `companion_dlls` triggers the role to also publish `Signavex.Jobs.dll` into the deploy tree.
+- [ ] **P3.B.2** Vault entry for `vault_signavex_db_password` only — all other secrets (API keys, OAuth secret, SendGrid) ship in the rendered `appsettings.Production.json` from GH Actions secrets, never touch the box's Ansible vault.
+- [ ] **P3.B.3** Postgres role: create database `signavex` and user `signavex` with `CONNECT`, `CREATE`, `USAGE` on schema `public`. If the existing role doesn't have a "create database" task, add it during P3.B.0.
+- [ ] **P3.B.4** systemd unit for `signavex.service` (rendered by the existing role template — no new template needed beyond the timer additions in P3.B.0).
+- [ ] **P3.B.5** Caddy block for `signavex.learnedgeek.com`, reverse proxy to `localhost:5001`. Since we're going grey-cloud (see P3.D), Caddy handles its own Let's Encrypt cert via HTTP-01 — no DNS-01 plumbing needed.
+- [ ] **P3.B.6** ~~Crontab entries with `flock`~~ — **superseded.** systemd timer units (P3.B.0 + P3.B.1) replace the crontab approach entirely:
+  - `journalctl -u signavex-scan` gives us scheduled-job logs alongside Web logs, no separate `/var/log/signavex/scan.log`.
+  - `systemctl list-timers` shows "next run / last run / status" for all 6 jobs at a glance.
+  - Mutex is implicit (`Type=oneshot` services can't double-fire). `flock` goes away.
+  - `Persistent=true` catches up missed runs after a reboot — cron just drops them.
+  - `OnCalendar=Mon..Fri 22:00 UTC` is arguably clearer than `0 22 * * 1-5`.
+  systemd is already our service supervisor; adding cron would be a second scheduling system to debug. One stack > two.
+- [ ] **P3.B.7** ~~`/etc/logrotate.d/signavex`~~ — **superseded.** journald handles log retention (size-based caps, configurable in `/etc/systemd/journald.conf`). No logrotate config needed.
 
 ### P3.C: Backups (was Azure SQL automatic; now ours)
 - [ ] **P3.C.1** Nightly `pg_dump signavex` to `/var/backups/signavex-YYYY-MM-DD.sql.gz`. Either cron entry on the box or a system timer unit.
@@ -167,7 +237,7 @@ Mirror `learnedgeek/.github/workflows/deploy.yml`. Differences vs LearnedGeek:
 
 ### P3.D: Domain
 - [x] **P3.D.1** ~~Decide domain~~ — `signavex.learnedgeek.com` confirmed. Future `signavex.com` registration deferred.
-- [ ] **P3.D.2** Cloudflare DNS: A record for `signavex` → VPS IP, orange-cloud proxy ON. Wildcard cert on `*.learnedgeek.com` already covers it.
+- [ ] **P3.D.2** Cloudflare DNS: A record for `signavex` → VPS IP, **grey-cloud (DNS only)**. Matches the LCS pattern; Caddy on the origin handles Let's Encrypt directly via HTTP-01 with zero extra config. Signavex doesn't have DDoS / WAF / CDN needs that justify orange-cloud's complexity (TLS termination at the edge means Caddy can't do HTTP-01 / TLS-ALPN-01, forcing DNS-01 with a scoped Cloudflare API token or a manually installed Origin Certificate). If we ever want CF protection later, orange-cloud the record and add DNS-01 config in one focused change.
 
 **Exit:** Push to a `migration` branch triggers a deploy to a temporary path on the VPS (e.g., `/var/www/signavex-staging`), Caddy serves it on a staging subdomain. Validate end-to-end.
 

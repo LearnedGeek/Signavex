@@ -1,0 +1,39 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "Anthropic": {
+    "ApiKey": "${ANTHROPIC_API_KEY}",
+    "Model": "claude-sonnet-4-20250514",
+    "MaxTokens": 4096
+  },
+  "Signavex": {
+    "ConnectionString": "Host=localhost;Database=signavex;Username=signavex;Password=${DB_PASSWORD};Maximum Pool Size=20",
+    "SurfacingThreshold": 0.45,
+    "Universe": [ "SP500", "SP400" ]
+  },
+  "Google": {
+    "ClientId": "${GOOGLE_CLIENT_ID}",
+    "ClientSecret": "${GOOGLE_CLIENT_SECRET}"
+  },
+  "DataProviders": {
+    "Polygon": {
+      "ApiKey": "${POLYGON_API_KEY}",
+      "BaseUrl": "https://api.massive.com",
+      "MaxRequestsPerMinute": 5
+    },
+    "AlphaVantage": {
+      "ApiKey": "${ALPHA_VANTAGE_API_KEY}",
+      "BaseUrl": "https://www.alphavantage.co"
+    },
+    "Fred": {
+      "ApiKey": "${FRED_API_KEY}",
+      "BaseUrl": "https://api.stlouisfed.org"
+    }
+  }
+}

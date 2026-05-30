@@ -6,7 +6,7 @@ using Signavex.Domain.Models;
 using Signavex.Infrastructure.Persistence;
 using Signavex.Infrastructure.Persistence.Entities;
 
-namespace Signavex.Functions.Orchestrators;
+namespace Signavex.Jobs.Orchestrators;
 
 /// <summary>
 /// FT2: nightly evaluator. Walks <c>PickOutcomes</c> and fills in:
