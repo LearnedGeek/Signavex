@@ -25,11 +25,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- appsettings.json is for local-dev `dotnet run` of Signavex.Jobs. In
+         production the box has /var/www/signavex/appsettings.json from Web's
+         publish (Signavex.Jobs.dll lives in the same directory and inherits
+         it). CopyToPublishDirectory=Never avoids NETSDK1152 conflict when
+         Web's publish step transitively pulls this project. -->
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="appsettings.Production.json.template">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 
