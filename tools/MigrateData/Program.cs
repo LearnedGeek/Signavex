@@ -1,6 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using Signavex.Infrastructure.Persistence;
 
+// SQL Server's `datetime2` doesn't carry a timezone, so EF reads it as
+// DateTime.Kind=Unspecified. Npgsql refuses to write Unspecified into
+// `timestamp with time zone` columns — only Utc. All Signavex's DateTime
+// columns are *Utc by intent (StartedAtUtc, CompletedAtUtc, FetchedAtUtc,
+// etc.), so this AppContext switch tells Npgsql to treat the inbound
+// Unspecified values as UTC. Must be set before any DbContext spins up.
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 // =============================================================================
 // MigrateData — Azure SQL → PostgreSQL one-shot data migration tool.
 //
@@ -224,9 +232,17 @@ async Task AdvanceSequencesAsync(SignavexDbContext db)
 
     foreach (var (table, idCol) in tablesWithIntId)
     {
+        // pg_get_serial_sequence treats its first arg as a regular identifier
+        // (case-folded to lowercase) unless the string literal itself contains
+        // embedded double-quotes — e.g. '"ScanRuns"' preserves case. Without
+        // the embedded quotes, the lookup tries `scanruns` and fails because
+        // EF created the table as `"ScanRuns"`. The column arg, by contrast,
+        // is already treated as case-preserved.
+        var bareTable = table.Replace("\"", "");
+        var bareCol = idCol.Replace("\"", "");
         var sql = $@"
             SELECT setval(
-                pg_get_serial_sequence('{table.Replace("\"", "")}', '{idCol.Replace("\"", "")}'),
+                pg_get_serial_sequence('""{bareTable}""', '{bareCol}'),
                 COALESCE((SELECT MAX({idCol}) FROM {table}), 1),
                 true
             );";
