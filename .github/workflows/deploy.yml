@@ -59,6 +59,22 @@ jobs:
           dotnet build Signavex.sln --no-restore --configuration Release
           dotnet test Signavex.sln --no-build --configuration Release
 
+      # Tailwind CSS — the project's MSBuild target only runs on Windows
+      # (it shells out to .tailwind\tailwindcss.exe and is gated on that
+      # file existing). On the Ubuntu runner the condition silently
+      # evaluates to false, the target is skipped, and `dotnet publish`
+      # ships without wwwroot/css/app.built.css — the app then renders
+      # completely unstyled. Download the Linux standalone binary and
+      # produce the file ourselves before publish picks up wwwroot.
+      - name: Build Tailwind CSS
+        run: |
+          curl -sSL -o tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v4.2.1/tailwindcss-linux-x64
+          chmod +x tailwindcss
+          ./tailwindcss \
+            -i src/Signavex.Web/Styles/app.css \
+            -o src/Signavex.Web/wwwroot/css/app.built.css \
+            --minify
+
       - name: Publish (linux-x64, framework-dependent)
         # Web's project references include Signavex.Jobs, so the Jobs DLL
         # lands in the same publish output alongside Signavex.Web.dll.
