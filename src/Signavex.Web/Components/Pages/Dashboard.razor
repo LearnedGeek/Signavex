@@ -165,6 +165,29 @@
             Showing @_filteredResults.Count of @_displayCount stock picks
         </p>
 
+        @* Agent export — top high-conviction picks formatted for a Public.com
+           AI trading agent (or similar). Static SSR, so the Copy button uses
+           a vanilla inline JS onclick — no Blazor interactivity required. *@
+        @if (_isPro && _agentExportLines.Count > 0)
+        {
+            <div class="mt-6 rounded-[var(--radius-md)] border border-outline-variant bg-surface-container-lowest p-4">
+                <div class="flex items-center justify-between mb-3 gap-3">
+                    <div>
+                        <h2 class="text-sm font-semibold text-on-surface m-0">Copy for AI Trading Agent</h2>
+                        <p class="text-xs text-on-surface-variant mt-0.5 m-0">
+                            Top @_agentExportLines.Count picks scoring @AgentExportThreshold.ToString("F2")+ · @AgentExportHorizonDays-day horizon · paste into Public.com or similar.
+                        </p>
+                    </div>
+                    <button type="button"
+                            onclick="navigator.clipboard.writeText(document.getElementById('agent-export-text').innerText).then(()=>{this.innerText='Copied';setTimeout(()=>this.innerText='Copy',1500);})"
+                            class="shrink-0 rounded-[var(--radius-sm)] border border-outline px-3 py-1.5 text-xs font-medium text-on-surface-variant hover:bg-surface-container">
+                        Copy
+                    </button>
+                </div>
+                <pre id="agent-export-text" class="rounded-[var(--radius-sm)] bg-surface-container p-3 text-xs font-mono text-on-surface overflow-x-auto whitespace-pre m-0">@string.Join("\n", _agentExportLines)</pre>
+            </div>
+        }
+
         @if (!_isPro && _displayCount > 5)
         {
             <div class="mt-4">
@@ -193,6 +216,16 @@
     private int _totalEvaluated;
     private bool _isPro;
 
+    // Agent-export config. Threshold is higher than the surfacing cutoff
+    // (0.45) because for real money you want conviction, not just "above
+    // the bar." Horizon defaults to 90d — the median of our 30/90/180/365
+    // forward-test windows. Held as consts for now; promote to config
+    // once we have data showing different values produce better outcomes.
+    private const double AgentExportThreshold = 0.55;
+    private const int AgentExportMaxPicks = 5;
+    private const int AgentExportHorizonDays = 90;
+    private List<string> _agentExportLines = new();
+
     protected override async Task OnParametersSetAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -208,6 +241,16 @@
                 _lastScanTime = result.CompletedAtUtc;
                 _lastScanErrors = result.ErrorCount;
                 _totalEvaluated = result.TotalEvaluated;
+
+                // Agent export lines — computed from the raw candidate set
+                // so they reflect the top high-conviction picks regardless of
+                // the UI's tier/sort filters.
+                _agentExportLines = result.Candidates
+                    .Where(c => c.FinalScore >= AgentExportThreshold)
+                    .OrderByDescending(c => c.FinalScore)
+                    .Take(AgentExportMaxPicks)
+                    .Select(c => $"{c.Ticker} | score {c.FinalScore:F2} | horizon {AgentExportHorizonDays}d")
+                    .ToList();
 
                 var threshold = Options.Value.SurfacingThreshold;
                 IEnumerable<StockCandidate> filtered = result.Candidates
